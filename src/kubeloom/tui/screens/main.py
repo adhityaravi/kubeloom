@@ -1,30 +1,22 @@
 """Main screen for kubeloom TUI."""
 
-from typing import List, Optional, Set
+from typing import List, Optional
 import asyncio
-from datetime import datetime
-from collections import deque
 from textual import work
 from textual.app import ComposeResult
 from textual.containers import Container, Vertical, Horizontal
 from textual.widgets import Static, DataTable, TabbedContent, TabPane, Tree
 from textual.screen import Screen
 from textual.binding import Binding
-from rich.console import RenderableType
-from rich.panel import Panel
-from rich.columns import Columns
-from rich.text import Text
-from rich.table import Table as RichTable
 
-from ...core.models import Policy, ServiceMesh, AccessError
+from ...core.models import Policy, ServiceMesh
 from ...core.interfaces import MeshAdapter
 from ...core.services import PolicyAnalyzer, ResourceInfo
 from ...k8s.client import K8sClient
 from ...mesh.istio.adapter import IstioAdapter
 from ..widgets import StatusBar, NamespaceSelector
-from .policy_detail import PolicyDetailScreen
-from .resource_detail import ResourceDetailScreen
-from .error_detail import ErrorDetailScreen
+from ..modals import PolicyDetailScreen, ResourceDetailScreen, ErrorDetailScreen
+from ..tabs import DashboardTab, PoliciesTab, ResourcesTab, MispicksTab
 
 
 class MainScreen(Screen):
@@ -63,11 +55,11 @@ class MainScreen(Screen):
         self.namespace_selector: Optional[NamespaceSelector] = None
         self.focused_section = "table"  # "table" or "tree"
 
-        # Mispicks (error tracking) state
-        self.is_tailing_logs = False
-        self.access_errors: deque = deque(maxlen=1000)  # Max 1000 errors in memory
-        self.access_error_hashes: Set[int] = set()  # For deduplication
-        self.log_tailer_task: Optional[asyncio.Task] = None
+        # Tab components
+        self.dashboard_tab = DashboardTab()
+        self.policies_tab = PoliciesTab()
+        self.resources_tab = ResourcesTab()
+        self.mispicks_tab = MispicksTab()
 
     def compose(self) -> ComposeResult:
         with Container(id="main-container"):
@@ -110,7 +102,7 @@ class MainScreen(Screen):
 
 NAVIGATION:
   h/j/k/l      Move cursor
-  1/2/3/4      Switch tabs (Dashboard/Policies/Resources/Conflicts)
+  1/2/3/4      Switch tabs (Dashboard/Policies/Resources/Mispicks)
 
 ACTIONS:
   r            Refresh data
@@ -122,7 +114,8 @@ ACTIONS:
         self.namespace_selector = self.query_one(NamespaceSelector)
 
         # Initialize mispicks table
-        self._init_mispicks_table()
+        table = self.query_one("#mispicks-table", DataTable)
+        self.mispicks_tab.init_table(table)
 
         # Force show something in dashboard immediately
         dashboard = self.query_one("#dashboard-content", Static)
@@ -190,21 +183,7 @@ ACTIONS:
     def _update_policies_table(self) -> None:
         """Update the policies table."""
         table = self.query_one("#policies-table", DataTable)
-        table.clear(columns=True)
-
-        table.add_column("Name")
-        table.add_column("Type")
-        table.add_column("Status")
-        table.add_column("Targets")
-        table.add_column("Routes")
-        for policy in self.policies:
-            table.add_row(
-                policy.name,
-                str(policy.type.value),
-                str(policy.status.value),
-                str(len(policy.targets)),
-                str(len(policy.allowed_routes))
-            )
+        self.policies_tab.update_table(table, self.policies)
 
     async def _refresh_resources(self) -> None:
         """Refresh resources affected by policies in current namespace."""
@@ -216,329 +195,51 @@ ACTIONS:
         try:
             self.resources = await self.policy_analyzer.get_all_affected_resources(self.policies)
             self._update_resources_table()
-        except Exception as e:
+        except Exception:
             self.resources = []
             self._update_resources_table()
 
     def _update_resources_table(self) -> None:
         """Update the resources table."""
         table = self.query_one("#resources-table", DataTable)
-        table.clear(columns=True)
-
-        table.add_column("Name")
-        table.add_column("Type")
-        table.add_column("Service Account")
-        table.add_column("Policies")
-        table.add_column("Labels")
-
-        # Group resources by type
-        grouped_resources = {}
-        for resource in self.resources:
-            if resource.type not in grouped_resources:
-                grouped_resources[resource.type] = []
-            grouped_resources[resource.type].append(resource)
-
-        # Sort resource types for consistent display
-        type_order = ["service", "pod", "statefulset", "deployment", "daemonset"]
-        sorted_types = []
-
-        # Add known types in order
-        for resource_type in type_order:
-            if resource_type in grouped_resources:
-                sorted_types.append(resource_type)
-
-        # Add any unknown types at the end
-        for resource_type in sorted(grouped_resources.keys()):
-            if resource_type not in sorted_types:
-                sorted_types.append(resource_type)
-
-        # Add resources to table grouped by type
-        for resource_type in sorted_types:
-            resources_of_type = grouped_resources[resource_type]
-
-            # Sort resources within type by name
-            resources_of_type.sort(key=lambda r: r.name)
-
-            for resource in resources_of_type:
-                # Count policies affecting this resource
-                affecting_policies = sum(1 for policy in self.policies
-                                       if self._resource_affected_by_policy(resource, policy))
-
-                # Format labels (show first few key=value pairs)
-                labels_str = ", ".join([f"{k}={v}" for k, v in list(resource.labels.items())[:2]])
-                if len(resource.labels) > 2:
-                    labels_str += f"... (+{len(resource.labels) - 2})"
-
-                table.add_row(
-                    resource.name,
-                    resource.type,
-                    resource.service_account or "-",
-                    str(affecting_policies),
-                    labels_str or "-"
-                )
-
-    def _resource_affected_by_policy(self, resource: ResourceInfo, policy: Policy) -> bool:
-        """Check if a resource is affected by a policy (as source or target)."""
-        # Check if resource is a target
-        for target in policy.targets:
-            if resource.type == "service" and resource.name in target.services:
-                return True
-            if resource.type == "pod" and resource.name in target.pods:
-                return True
-            if target.workload_labels:
-                if all(resource.labels.get(k) == v for k, v in target.workload_labels.items()):
-                    return True
-
-        # Check if resource is a source
-        if policy.source:
-            if (resource.service_account and
-                resource.service_account in policy.source.service_accounts):
-                return True
-            if policy.source.workload_labels:
-                if all(resource.labels.get(k) == v for k, v in policy.source.workload_labels.items()):
-                    return True
-
-        return False
+        self.resources_tab.update_table(table, self.resources, self.policies)
 
     async def _update_namespace_tree(self) -> None:
         """Update the namespace tree with namespaces that have policies."""
+        current_ns = self.namespace_selector.get_current_namespace() if self.namespace_selector else None
+
         # Update both namespace trees
         try:
             tree = self.query_one("#namespace-tree", Tree)
-            await self._populate_namespace_tree(tree)
+            await self.policies_tab.update_namespace_tree(
+                tree, self.namespaces_with_policies, current_ns, self.mesh_adapter
+            )
         except Exception:
             pass
 
         try:
             tree_resources = self.query_one("#namespace-tree-resources", Tree)
-            await self._populate_namespace_tree(tree_resources)
+            await self.policies_tab.update_namespace_tree(
+                tree_resources, self.namespaces_with_policies, current_ns, self.mesh_adapter
+            )
         except Exception:
             pass
-
-    async def _populate_namespace_tree(self, tree: Tree) -> None:
-        """Populate a namespace tree with namespaces that have policies."""
-        tree.clear()
-
-        current_ns = self.namespace_selector.get_current_namespace() if self.namespace_selector else None
-
-        for namespace in self.namespaces_with_policies:
-            # Get policy count for this namespace
-            try:
-                if self.mesh_adapter:
-                    policies = await self.mesh_adapter.get_policies(namespace)
-                    policy_count = len(policies)
-                else:
-                    policy_count = 0
-            except Exception:
-                policy_count = 0
-
-            # Make each namespace a leaf node with policy count in the label
-            if namespace == current_ns:
-                node_label = f"[bold]{namespace}[/bold] ({policy_count})"
-            else:
-                node_label = f"{namespace} ({policy_count})"
-
-            leaf = tree.root.add_leaf(node_label)
-            leaf.data = namespace
 
     def _update_dashboard(self) -> None:
         """Update dashboard with cluster and mesh statistics."""
         dashboard = self.query_one("#dashboard-content", Static)
-
-        if not self.service_mesh or not self.k8s_client:
-            error_panel = Panel(
-                "[red]No mesh connection available[/red]",
-                title="[bold red]Connection Error[/bold red]",
-                border_style="red"
-            )
-            dashboard.update(error_panel)
-            return
-
-        current_ns = self.namespace_selector.get_current_namespace() if self.namespace_selector else "unknown"
-        total_namespaces = len(self.namespaces_with_policies)
-        total_policies = len(self.policies)
-
-        # Policy type breakdown
-        policy_types = {}
-        for policy in self.policies:
-            policy_type = policy.type.value
-            policy_types[policy_type] = policy_types.get(policy_type, 0) + 1
-
-        # Create mesh info
-        mesh_info = Text()
-        mesh_info.append(f"{self.service_mesh.type.value}", style="bold cyan")
-        mesh_info.append(f" v{self.service_mesh.version}", style="dim cyan")
-
-        # Create namespace info
-        ns_info = Text()
-        ns_info.append(f"{current_ns}", style="bold green")
-        ns_info.append(f"\n{total_namespaces} namespaces with policies", style="dim")
-
-        # Create policy stats table
-        policy_table = RichTable(show_header=True, header_style="bold magenta")
-        policy_table.add_column("Policy Type", style="cyan")
-        policy_table.add_column("Count", justify="right", style="green")
-
-        for policy_type, count in sorted(policy_types.items()):
-            policy_table.add_row(policy_type, str(count))
-
-        if not policy_types:
-            policy_table.add_row("[dim]No policies found[/dim]", "[dim]-[/dim]")
-
-        content = f"""[bold]Service Mesh[/bold]
-{self.service_mesh.type.value} v{self.service_mesh.version}
-
-[bold]Cluster Overview[/bold]
-{total_namespaces} namespaces with policies
-
-[bold]Policies ({total_policies})[/bold]"""
-
-        for policy_type, count in sorted(policy_types.items()):
-            content += f"\n{policy_type}: {count}"
-
-        if not policy_types:
-            content += "\nNo policies found"
-
-        # Create simple panel without title
-        main_panel = Panel(
-            content,
-            border_style="white"
+        panel = self.dashboard_tab.render(
+            self.service_mesh,
+            self.namespaces_with_policies,
+            self.policies,
+            self.namespace_selector
         )
-
-        dashboard.update(main_panel)
-
-    # Mispicks (Error Tracking) Methods
-    def _init_mispicks_table(self) -> None:
-        """Initialize the mispicks table columns."""
-        table = self.query_one("#mispicks-table", DataTable)
-        table.add_column("Time", width=20)
-        table.add_column("Type", width=20)
-        table.add_column("Source", width=30)
-        table.add_column("Target", width=30)
-        table.add_column("Reason", width=50)
+        dashboard.update(panel)
 
     def _update_mispicks_table(self) -> None:
-        """Update the mispicks table with current errors."""
+        """Update the mispicks table."""
         table = self.query_one("#mispicks-table", DataTable)
-        table.clear()
-
-        # Errors are already in deque, most recent appended last
-        # Reverse to show most recent first
-        sorted_errors = list(reversed(self.access_errors))
-
-        for error in sorted_errors:
-            # Format timestamp
-            timestamp_str = error.timestamp.strftime("%Y-%m-%d %H:%M:%S") if error.timestamp else "-"
-
-            # Format source
-            if error.source_workload and error.source_namespace:
-                source = f"{error.source_namespace}/{error.source_workload}"
-            elif error.source_ip:
-                source = error.source_ip
-            else:
-                source = "-"
-
-            # Format target
-            if error.target_service:
-                target = error.target_service
-                if error.target_port:
-                    target = f"{target}:{error.target_port}"
-            elif error.target_workload and error.target_namespace:
-                target = f"{error.target_namespace}/{error.target_workload}"
-                if error.target_port:
-                    target = f"{target}:{error.target_port}"
-            elif error.target_ip:
-                target = error.target_ip
-                if error.target_port:
-                    target = f"{target}:{error.target_port}"
-            else:
-                target = "-"
-
-            # Format HTTP details if present
-            if error.http_method or error.http_path:
-                http_details = f"{error.http_method or ''} {error.http_path or ''}".strip()
-                target = f"{target} ({http_details})"
-
-            table.add_row(
-                timestamp_str,
-                error.error_type.value,
-                source,
-                target,
-                error.reason[:100] if error.reason else "-"  # Truncate long reasons
-            )
-
-    def _start_log_tailing(self) -> None:
-        """Start tailing access logs from mesh."""
-        if self.is_tailing_logs or not self.mesh_adapter:
-            return
-
-        self.is_tailing_logs = True
-
-        # Update UI
-        self.query_one("#tailing-status", Static).update("Status: Running | s: Start | x: Stop | c: Clear")
-
-        # Start background worker
-        self.log_tailer_task = asyncio.create_task(self._tail_logs_worker())
-
-    def _stop_log_tailing(self) -> None:
-        """Stop tailing access logs."""
-        if not self.is_tailing_logs:
-            return
-
-        self.is_tailing_logs = False
-
-        # Cancel the worker task
-        if self.log_tailer_task:
-            self.log_tailer_task.cancel()
-            self.log_tailer_task = None
-
-        # Update UI
-        self.query_one("#tailing-status", Static).update("Status: Stopped | s: Start | x: Stop | c: Clear")
-
-    def _clear_errors(self) -> None:
-        """Clear all collected errors."""
-        self.access_errors.clear()
-        self.access_error_hashes.clear()
-        self._update_mispicks_table()
-
-    async def _tail_logs_worker(self) -> None:
-        """Background worker that tails logs and updates the error table."""
-        if not self.mesh_adapter:
-            return
-
-        try:
-            # Get current namespace filter
-            current_namespace = None
-            if self.namespace_selector:
-                current_namespace = self.namespace_selector.get_current_namespace()
-
-            # Tail logs from mesh
-            async for error in self.mesh_adapter.tail_access_logs(namespace=current_namespace):
-                if not self.is_tailing_logs:
-                    break
-
-                # Check for duplicates using hash
-                error_hash = hash(error)
-                if error_hash not in self.access_error_hashes:
-                    # Add to deque (automatically evicts oldest if at maxlen)
-                    self.access_errors.append(error)
-                    self.access_error_hashes.add(error_hash)
-
-                    # If deque evicted an error, clean up its hash
-                    if len(self.access_error_hashes) > 1000:
-                        # Rebuild hash set from current deque
-                        self.access_error_hashes = {hash(e) for e in self.access_errors}
-
-                    # Update table (use call_after_refresh to avoid blocking)
-                    self.call_after_refresh(self._update_mispicks_table)
-
-        except asyncio.CancelledError:
-            # Task was cancelled, clean exit
-            pass
-        except Exception as e:
-            # Log error and stop tailing
-            self.query_one("#tailing-status", Static).update(f"Status: Error - {str(e)} | s: Start | x: Stop | c: Clear")
-            self.is_tailing_logs = False
+        self.mispicks_tab.update_table(table)
 
     # Actions
     async def action_refresh(self) -> None:
@@ -564,7 +265,7 @@ ACTIONS:
         tabs.active = "dashboard"
 
     def action_view_item(self) -> None:
-        """View selected item details (policy or resource)."""
+        """View selected item details (policy, resource, or error)."""
         tabs = self.query_one("#main-tabs", TabbedContent)
 
         if tabs.active == "policies":
@@ -585,11 +286,9 @@ ACTIONS:
 
         elif tabs.active == "mispicks":
             table = self.query_one("#mispicks-table", DataTable)
-            if table.cursor_row is not None and len(self.access_errors) > 0:
-                # Get the error from the reversed list (since table shows most recent first)
-                sorted_errors = list(reversed(self.access_errors))
-                if table.cursor_row < len(sorted_errors):
-                    error = sorted_errors[table.cursor_row]
+            if table.cursor_row is not None:
+                error = self.mispicks_tab.get_error_at_row(table.cursor_row)
+                if error:
                     self.app.push_screen(ErrorDetailScreen(error))
 
     def on_data_table_cell_selected(self, event: DataTable.CellSelected) -> None:
@@ -605,12 +304,9 @@ ACTIONS:
             if resource and self.policy_analyzer:
                 self.app.push_screen(ResourceDetailScreen(resource, self.policies, self.policy_analyzer, self.k8s_client))
         elif event.data_table.id == "mispicks-table":
-            if len(self.access_errors) > 0:
-                # Get the error from the reversed list (since table shows most recent first)
-                sorted_errors = list(reversed(self.access_errors))
-                if event.coordinate.row < len(sorted_errors):
-                    error = sorted_errors[event.coordinate.row]
-                    self.app.push_screen(ErrorDetailScreen(error))
+            error = self.mispicks_tab.get_error_at_row(event.coordinate.row)
+            if error:
+                self.app.push_screen(ErrorDetailScreen(error))
 
     def action_cursor_up(self) -> None:
         """Move cursor up in focused section."""
@@ -707,19 +403,27 @@ ACTIONS:
         """Start tailing logs (only in Mispicks tab)."""
         tabs = self.query_one("#main-tabs", TabbedContent)
         if tabs.active == "mispicks":
-            self._start_log_tailing()
+            status_widget = self.query_one("#tailing-status", Static)
+            self.mispicks_tab.start_tailing(
+                status_widget,
+                self.mesh_adapter,
+                self.namespace_selector,
+                lambda: self.call_after_refresh(self._update_mispicks_table)
+            )
 
     def action_stop_tailing(self) -> None:
         """Stop tailing logs (only in Mispicks tab)."""
         tabs = self.query_one("#main-tabs", TabbedContent)
         if tabs.active == "mispicks":
-            self._stop_log_tailing()
+            status_widget = self.query_one("#tailing-status", Static)
+            self.mispicks_tab.stop_tailing(status_widget)
 
     def action_clear_mispicks(self) -> None:
         """Clear errors (only in Mispicks tab)."""
         tabs = self.query_one("#main-tabs", TabbedContent)
         if tabs.active == "mispicks":
-            self._clear_errors()
+            self.mispicks_tab.clear_errors()
+            self._update_mispicks_table()
 
     def action_tab_conflicts(self) -> None:
         """Switch to conflicts tab."""
@@ -750,14 +454,3 @@ ACTIONS:
                     await self._refresh_policies()
                 except ValueError:
                     pass  # Namespace not found in list
-
-    async def _switch_to_namespace(self, target_namespace: str) -> None:
-        """Switch to a specific namespace."""
-        if self.namespace_selector:
-            try:
-                current_index = self.namespaces_with_policies.index(target_namespace)
-                self.namespace_selector.current_index = current_index
-                self.namespace_selector.update_display()
-                await self._refresh_policies()
-            except ValueError:
-                pass  # Namespace not found in list
