@@ -359,6 +359,245 @@ class K8sClient(ClusterClient):
         except ApiException as e:
             raise RuntimeError(f"Failed to get pods: {e}") from e
 
+    async def create_custom_object(
+        self,
+        group: str,
+        version: str,
+        namespace: str,
+        plural: str,
+        body: dict[str, Any]
+    ) -> dict[str, Any]:
+        """
+        Create a custom Kubernetes object.
+
+        Args:
+            group: API group (e.g., "security.istio.io")
+            version: API version (e.g., "v1")
+            namespace: Namespace to create the object in
+            plural: Plural form of the resource (e.g., "authorizationpolicies")
+            body: Resource manifest as dictionary
+
+        Returns:
+            Created resource as dictionary
+
+        Raises:
+            RuntimeError: If creation fails
+        """
+        await self._ensure_connected()
+
+        try:
+            assert self._custom_objects is not None
+
+            loop = asyncio.get_event_loop()
+            result = await loop.run_in_executor(
+                None,
+                lambda: self._custom_objects.create_namespaced_custom_object(
+                    group=group,
+                    version=version,
+                    namespace=namespace,
+                    plural=plural,
+                    body=body
+                )
+            )
+            return result
+
+        except ApiException as e:
+            raise RuntimeError(f"Failed to create {plural} in {namespace}: {e}") from e
+
+    async def delete_custom_object(
+        self,
+        group: str,
+        version: str,
+        namespace: str,
+        plural: str,
+        name: str
+    ) -> dict[str, Any]:
+        """
+        Delete a custom Kubernetes object.
+
+        Args:
+            group: API group (e.g., "security.istio.io")
+            version: API version (e.g., "v1")
+            namespace: Namespace containing the object
+            plural: Plural form of the resource (e.g., "authorizationpolicies")
+            name: Name of the resource to delete
+
+        Returns:
+            Deletion status as dictionary
+
+        Raises:
+            RuntimeError: If deletion fails
+        """
+        await self._ensure_connected()
+
+        try:
+            assert self._custom_objects is not None
+
+            loop = asyncio.get_event_loop()
+            result = await loop.run_in_executor(
+                None,
+                lambda: self._custom_objects.delete_namespaced_custom_object(
+                    group=group,
+                    version=version,
+                    namespace=namespace,
+                    plural=plural,
+                    name=name
+                )
+            )
+            return result
+
+        except ApiException as e:
+            raise RuntimeError(f"Failed to delete {plural}/{name} in {namespace}: {e}") from e
+
+    async def list_custom_objects(
+        self,
+        group: str,
+        version: str,
+        namespace: str,
+        plural: str,
+        label_selector: str | None = None
+    ) -> dict[str, Any]:
+        """
+        List custom Kubernetes objects with optional label selector.
+
+        Args:
+            group: API group (e.g., "security.istio.io")
+            version: API version (e.g., "v1")
+            namespace: Namespace to list objects from
+            plural: Plural form of the resource (e.g., "authorizationpolicies")
+            label_selector: Optional label selector (e.g., "app=foo,env=prod")
+
+        Returns:
+            List response as dictionary with 'items' field
+
+        Raises:
+            RuntimeError: If listing fails
+        """
+        await self._ensure_connected()
+
+        try:
+            assert self._custom_objects is not None
+
+            loop = asyncio.get_event_loop()
+            result = await loop.run_in_executor(
+                None,
+                lambda: self._custom_objects.list_namespaced_custom_object(
+                    group=group,
+                    version=version,
+                    namespace=namespace,
+                    plural=plural,
+                    label_selector=label_selector
+                )
+            )
+            return result
+
+        except ApiException as e:
+            raise RuntimeError(f"Failed to list {plural} in {namespace}: {e}") from e
+
+    async def patch_pod(
+        self,
+        name: str,
+        namespace: str,
+        body: dict[str, Any]
+    ) -> dict[str, Any]:
+        """
+        Patch a pod (e.g., to update labels).
+
+        Args:
+            name: Pod name
+            namespace: Pod namespace
+            body: Patch body as dictionary
+
+        Returns:
+            Patched pod as dictionary
+
+        Raises:
+            RuntimeError: If patching fails
+        """
+        await self._ensure_connected()
+
+        try:
+            assert self._core_v1 is not None
+
+            loop = asyncio.get_event_loop()
+            result = await loop.run_in_executor(
+                None,
+                lambda: self._core_v1.patch_namespaced_pod(
+                    name=name,
+                    namespace=namespace,
+                    body=body
+                )
+            )
+            return result.to_dict()
+
+        except ApiException as e:
+            raise RuntimeError(f"Failed to patch pod {namespace}/{name}: {e}") from e
+
+    async def find_pod_by_ip(self, ip: str) -> dict[str, Any] | None:
+        """
+        Find a pod by its IP address using field selector.
+
+        Args:
+            ip: Pod IP address to search for
+
+        Returns:
+            Pod dictionary if found, None otherwise
+        """
+        await self._ensure_connected()
+
+        try:
+            assert self._core_v1 is not None
+
+            # Use field selector to efficiently find pod by IP
+            loop = asyncio.get_event_loop()
+            response = await loop.run_in_executor(
+                None,
+                lambda: self._core_v1.list_pod_for_all_namespaces(
+                    field_selector=f"status.podIP={ip}"
+                )
+            )
+
+            # Return first matching pod (IPs are unique)
+            if response.items:
+                return response.items[0].to_dict()
+
+            return None
+
+        except ApiException as e:
+            # Field selector might not be supported in older K8s versions
+            # Silently return None rather than error
+            return None
+
+    async def get_pod(self, name: str, namespace: str) -> dict[str, Any] | None:
+        """
+        Get a specific pod by name and namespace.
+
+        Args:
+            name: Pod name
+            namespace: Pod namespace
+
+        Returns:
+            Pod dictionary if found, None otherwise
+        """
+        await self._ensure_connected()
+
+        try:
+            assert self._core_v1 is not None
+
+            loop = asyncio.get_event_loop()
+            response = await loop.run_in_executor(
+                None,
+                lambda: self._core_v1.read_namespaced_pod(
+                    name=name,
+                    namespace=namespace
+                )
+            )
+            return response.to_dict()
+
+        except ApiException as e:
+            # Pod not found or other error
+            return None
+
     async def close(self) -> None:
         """Close the client connection and cleanup resources."""
         # Close API client
