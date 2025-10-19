@@ -1,6 +1,7 @@
 """Kubernetes client implementation."""
 
 import asyncio
+from queue import Queue
 from typing import Any, AsyncIterator
 
 from kubernetes import client, config, watch
@@ -230,7 +231,10 @@ class K8sClient(ClusterClient):
         tail_lines: int | None = 10
     ) -> AsyncIterator[str]:
         """
-        Stream logs from a pod.
+        Stream logs from a pod using daemon threads.
+
+        Uses daemon threads that won't block process exit. When the app exits,
+        any running log streams will be immediately terminated.
 
         Args:
             pod_name: Name of the pod
@@ -244,18 +248,17 @@ class K8sClient(ClusterClient):
         """
         await self._ensure_connected()
 
-        try:
-            assert self._core_v1 is not None
+        assert self._core_v1 is not None
 
-            # Use the watch module to stream logs
-            w = watch.Watch()
+        # Queue for receiving log lines from daemon thread
+        log_queue: Queue = Queue()
+        stop_flag = {"stop": False}
 
-            # Run the blocking stream in a thread pool to avoid blocking event loop
-            loop = asyncio.get_event_loop()
-
-            # Create iterator in thread
-            def create_stream():
-                return w.stream(
+        def stream_logs_in_thread():
+            """Run log streaming in a daemon thread."""
+            try:
+                w = watch.Watch()
+                stream = w.stream(
                     self._core_v1.read_namespaced_pod_log,
                     name=pod_name,
                     namespace=namespace,
@@ -265,23 +268,55 @@ class K8sClient(ClusterClient):
                     timestamps=True
                 )
 
-            stream_iter = await loop.run_in_executor(None, create_stream)
-
-            # Iterate in thread pool
-            while True:
-                try:
-                    line = await loop.run_in_executor(None, next, stream_iter, None)
-                    if line is None:
+                for line in stream:
+                    if stop_flag["stop"]:
+                        w.stop()
                         break
-                    yield line
-                except StopIteration:
-                    break
+                    log_queue.put(("line", line))
 
-        except ApiException as e:
-            if e.status != 404:  # Ignore pod not found, it might have terminated
-                raise RuntimeError(f"Failed to stream logs from {namespace}/{pod_name}: {e}") from e
-        except Exception as e:
-            raise RuntimeError(f"Error streaming logs from {namespace}/{pod_name}: {e}") from e
+                # Signal end of stream
+                log_queue.put(("done", None))
+
+            except ApiException as e:
+                if e.status != 404:
+                    log_queue.put(("error", e))
+                else:
+                    log_queue.put(("done", None))
+            except Exception as e:
+                log_queue.put(("error", e))
+
+        # Start daemon thread for log streaming
+        import threading
+        thread = threading.Thread(
+            target=stream_logs_in_thread,
+            daemon=True,  # Won't block exit
+            name=f"log-stream-{pod_name}"
+        )
+        thread.start()
+
+        try:
+            # Yield lines as they arrive
+            while True:
+                # Non-blocking check with timeout
+                await asyncio.sleep(0.01)
+
+                if not log_queue.empty():
+                    msg_type, data = log_queue.get()
+
+                    if msg_type == "line":
+                        yield data
+                    elif msg_type == "error":
+                        raise RuntimeError(f"Error streaming logs from {namespace}/{pod_name}: {data}")
+                    elif msg_type == "done":
+                        break
+
+        except asyncio.CancelledError:
+            # Task cancelled - signal thread to stop
+            stop_flag["stop"] = True
+            raise
+        finally:
+            # Signal thread to stop
+            stop_flag["stop"] = True
 
     async def get_pods_by_label(
         self,
@@ -303,7 +338,7 @@ class K8sClient(ClusterClient):
         try:
             assert self._core_v1 is not None
 
-            # Run blocking k8s API call in thread pool
+            # Run blocking k8s API call in default thread pool
             loop = asyncio.get_event_loop()
 
             def get_pods():
@@ -318,18 +353,21 @@ class K8sClient(ClusterClient):
                     )
                 return [pod.to_dict() for pod in response.items]
 
+            # Use default executor (None) for non-streaming operations
             return await loop.run_in_executor(None, get_pods)
 
         except ApiException as e:
             raise RuntimeError(f"Failed to get pods: {e}") from e
 
     async def close(self) -> None:
-        """Close the client connection."""
+        """Close the client connection and cleanup resources."""
+        # Close API client
         if self._api_client and hasattr(self._api_client, 'close'):
             if asyncio.iscoroutinefunction(self._api_client.close):
                 await self._api_client.close()
             else:
                 self._api_client.close()
+
         self._api_client = None
         self._core_v1 = None
         self._custom_objects = None
