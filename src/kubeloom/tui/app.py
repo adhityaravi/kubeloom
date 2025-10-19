@@ -137,6 +137,65 @@ class KubeloomApp(App):
         color: $text;
     }
 
+    #resources-footer {
+        height: 1;
+        background: $surface;
+        color: $text-muted;
+        padding: 0 1;
+    }
+
+    #mispicks-table {
+        height: 1fr;
+        background: $surface;
+        color: $text;
+        border: solid $primary;
+    }
+
+    #mispicks-table > .datatable--header {
+        background: $primary;
+        color: $text-primary;
+        text-style: bold;
+    }
+
+    #mispicks-table > .datatable--cursor {
+        background: $accent;
+        color: $text-accent;
+    }
+
+    #mispicks-table > .datatable--hover {
+        background: $primary-lighten-2;
+        color: $text;
+    }
+
+    #mispicks-table .datatable--even-row {
+        background: $surface;
+        color: $text;
+    }
+
+    #mispicks-table .datatable--odd-row {
+        background: $panel;
+        color: $text;
+    }
+
+    #mispicks-footer-container {
+        height: 1;
+        background: $surface;
+        width: 100%;
+    }
+
+    #mispicks-keybindings {
+        width: 1fr;
+        color: $text-muted;
+        padding: 0 1;
+    }
+
+    #tailing-status {
+        width: auto;
+        color: $text;
+        padding: 0 1;
+        text-align: right;
+    }
+
     /* Namespace panel */
     #namespace-panel {
         width: 25%;

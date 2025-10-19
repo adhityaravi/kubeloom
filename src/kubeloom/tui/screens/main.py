@@ -41,6 +41,8 @@ class MainScreen(Screen):
         Binding("s", "start_tailing", "Start Tailing", show=False),
         Binding("x", "stop_tailing", "Stop Tailing", show=False),
         Binding("c", "clear_mispicks", "Clear Errors", show=False),
+        Binding("e", "enroll_pod", "Enroll Pod", show=False),
+        Binding("u", "unenroll_pod", "Unenroll Pod", show=False),
     ]
 
     def __init__(self):
@@ -49,6 +51,7 @@ class MainScreen(Screen):
         self.mesh_adapter: Optional[MeshAdapter] = None
         self.service_mesh: Optional[ServiceMesh] = None
         self.namespaces_with_policies: List[str] = []
+        self.namespaces: List = []  # Full namespace objects
         self.policies: List[Policy] = []
         self.resources: List[ResourceInfo] = []
         self.policy_analyzer: Optional[PolicyAnalyzer] = None
@@ -77,16 +80,20 @@ class MainScreen(Screen):
                             yield Tree("Namespaces", id="namespace-tree")
 
                 with TabPane("Resources", id="resources"):
-                    with Horizontal():
-                        yield DataTable(id="resources-table", zebra_stripes=True)
-                        with Container(id="namespace-panel"):
-                            yield Static("Namespaces", id="namespace-title")
-                            yield Tree("Namespaces", id="namespace-tree-resources")
+                    with Vertical():
+                        with Horizontal():
+                            yield DataTable(id="resources-table", zebra_stripes=True)
+                            with Container(id="namespace-panel"):
+                                yield Static("Namespaces", id="namespace-title")
+                                yield Tree("Namespaces", id="namespace-tree-resources")
+                        yield Static("e: Enroll Pod | u: Unenroll Pod", id="resources-footer")
 
                 with TabPane("Mispicks", id="mispicks"):
                     with Vertical():
-                        yield Static("Status: Not running | s: Start | x: Stop | c: Clear", id="tailing-status")
                         yield DataTable(id="mispicks-table", zebra_stripes=True)
+                        with Horizontal(id="mispicks-footer-container"):
+                            yield Static("s: Start | x: Stop | c: Clear", id="mispicks-keybindings")
+                            yield Static("Status: Not running", id="tailing-status")
 
                 with TabPane("Conflicts", id="conflicts"):
                     yield Static("Conflict detection not implemented", id="conflicts-content")
@@ -149,6 +156,7 @@ ACTIONS:
 
         try:
             namespaces = await self.k8s_client.get_namespaces()
+            self.namespaces = namespaces  # Store full namespace objects
             self.namespaces_with_policies = []
 
             for namespace in namespaces:
@@ -189,20 +197,34 @@ ACTIONS:
         """Refresh resources affected by policies in current namespace."""
         if not self.policy_analyzer or not self.policies:
             self.resources = []
-            self._update_resources_table()
+            await self._update_resources_table()
             return
 
         try:
             self.resources = await self.policy_analyzer.get_all_affected_resources(self.policies)
-            self._update_resources_table()
+            await self._update_resources_table()
         except Exception:
             self.resources = []
-            self._update_resources_table()
+            await self._update_resources_table()
 
-    def _update_resources_table(self) -> None:
+    async def _update_resources_table(self) -> None:
         """Update the resources table."""
         table = self.query_one("#resources-table", DataTable)
-        self.resources_tab.update_table(table, self.resources, self.policies)
+
+        # Get current namespace object
+        current_namespace = None
+        if self.namespace_selector:
+            current_ns_name = self.namespace_selector.get_current_namespace()
+            current_namespace = next((ns for ns in self.namespaces if ns.name == current_ns_name), None)
+
+        await self.resources_tab.update_table(
+            table,
+            self.resources,
+            self.policies,
+            self.mesh_adapter,
+            self.k8s_client,
+            current_namespace
+        )
 
     async def _update_namespace_tree(self) -> None:
         """Update the namespace tree with namespaces that have policies."""
@@ -280,6 +302,9 @@ ACTIONS:
             table = self.query_one("#resources-table", DataTable)
             if table.cursor_row is not None:
                 resource_name = table.get_row_at(table.cursor_row)[0]
+                # Handle Rich Text objects
+                if hasattr(resource_name, "plain"):
+                    resource_name = resource_name.plain
                 resource = next((r for r in self.resources if r.name == resource_name), None)
                 if resource and self.policy_analyzer:
                     self.app.push_screen(ResourceDetailScreen(resource, self.policies, self.policy_analyzer, self.k8s_client))
@@ -300,6 +325,9 @@ ACTIONS:
                 self.app.push_screen(PolicyDetailScreen(policy, self.k8s_client))
         elif event.data_table.id == "resources-table":
             resource_name = event.data_table.get_row_at(event.coordinate.row)[0]
+            # Handle Rich Text objects
+            if hasattr(resource_name, "plain"):
+                resource_name = resource_name.plain
             resource = next((r for r in self.resources if r.name == resource_name), None)
             if resource and self.policy_analyzer:
                 self.app.push_screen(ResourceDetailScreen(resource, self.policies, self.policy_analyzer, self.k8s_client))
@@ -434,6 +462,117 @@ ACTIONS:
         """Switch to help tab."""
         tabs = self.query_one("#main-tabs", TabbedContent)
         tabs.active = "help"
+
+    async def action_enroll_pod(self) -> None:
+        """Enroll selected pod in mesh (only in Resources tab)."""
+        tabs = self.query_one("#main-tabs", TabbedContent)
+        if tabs.active != "resources":
+            # Show feedback that we're not in the right tab
+            dashboard = self.query_one("#dashboard-content", Static)
+            dashboard.update("Enroll only works in Resources tab")
+            return
+
+        table = self.query_one("#resources-table", DataTable)
+        if table.cursor_row is None:
+            return
+
+        # Get the selected resource
+        resource_name = table.get_row_at(table.cursor_row)[0]
+        # Handle Rich Text objects
+        if hasattr(resource_name, "plain"):
+            resource_name = resource_name.plain
+
+        resource = next((r for r in self.resources if r.name == resource_name), None)
+        if not resource or resource.type != "pod":
+            # Show feedback
+            dashboard = self.query_one("#dashboard-content", Static)
+            dashboard.update(f"Cannot enroll {resource.type if resource else 'unknown'} - only pods can be enrolled")
+            return
+
+        # Show we're enrolling
+        dashboard = self.query_one("#dashboard-content", Static)
+        dashboard.update(f"Enrolling pod {resource.name}...")
+
+        # Enroll the pod
+        if self.mesh_adapter:
+            try:
+                success = await self.mesh_adapter.enroll_pod(resource.name, resource.namespace)
+                if success:
+                    self.app.notify(f"Pod {resource.name} enrolled in mesh", severity="information", timeout=3)
+                    dashboard.update(f"Pod enrolled! Refreshing...")
+                    # Small delay to let Kubernetes process the update
+                    await asyncio.sleep(0.5)
+                    # Refresh resources to show updated enrollment status
+                    await self._refresh_resources()
+                    dashboard.update(f"Pod {resource.name} enrolled in mesh")
+                else:
+                    self.app.notify(f"Failed to enroll pod {resource.name}", severity="warning", timeout=5)
+                    dashboard.update(f"Failed to enroll pod {resource.name}")
+            except Exception as e:
+                self.app.notify(f"Error: {str(e)}", severity="error", timeout=5)
+                dashboard.update(f"Error enrolling: {str(e)}")
+
+    async def action_unenroll_pod(self) -> None:
+        """Unenroll selected pod from mesh (only in Resources tab)."""
+        tabs = self.query_one("#main-tabs", TabbedContent)
+        if tabs.active != "resources":
+            return
+
+        table = self.query_one("#resources-table", DataTable)
+        if table.cursor_row is None:
+            return
+
+        # Get the selected resource
+        resource_name = table.get_row_at(table.cursor_row)[0]
+        # Handle Rich Text objects
+        if hasattr(resource_name, "plain"):
+            resource_name = resource_name.plain
+
+        resource = next((r for r in self.resources if r.name == resource_name), None)
+        if not resource or resource.type != "pod":
+            # Show feedback
+            dashboard = self.query_one("#dashboard-content", Static)
+            dashboard.update(f"Cannot unenroll {resource.type if resource else 'unknown'} - only pods can be unenrolled")
+            return
+
+        # Check if namespace is mesh-enabled
+        if self.mesh_adapter and self.namespace_selector:
+            current_ns_name = self.namespace_selector.get_current_namespace()
+            current_namespace = next((ns for ns in self.namespaces if ns.name == current_ns_name), None)
+
+            if current_namespace and self.mesh_adapter.is_namespace_mesh_enabled(current_namespace):
+                # Namespace is mesh-enabled, cannot unenroll individual pod
+                dashboard = self.query_one("#dashboard-content", Static)
+                dashboard.update(f"Pod cannot be removed from mesh - entire namespace '{current_ns_name}' is enrolled")
+                self.app.notify(
+                    f"Pod cannot be removed from mesh as the entire namespace is enrolled",
+                    severity="warning",
+                    timeout=5
+                )
+                return
+
+        # Show we're unenrolling
+        dashboard = self.query_one("#dashboard-content", Static)
+        dashboard.update(f"Unenrolling pod {resource.name}...")
+
+        # Unenroll the pod
+        if self.mesh_adapter:
+            try:
+                success = await self.mesh_adapter.unenroll_pod(resource.name, resource.namespace)
+                if success:
+                    self.app.notify(f"Pod {resource.name} unenrolled from mesh", severity="information", timeout=3)
+                    dashboard.update(f"Pod unenrolled! Refreshing...")
+                    # Small delay to let Kubernetes process the update
+                    await asyncio.sleep(0.5)
+                    # Refresh resources to show updated enrollment status
+                    await self._refresh_resources()
+                    dashboard.update(f"Pod {resource.name} unenrolled from mesh")
+                else:
+                    self.app.notify(f"Failed to unenroll pod {resource.name}", severity="warning", timeout=5)
+                    dashboard.update(f"Failed to unenroll pod {resource.name}")
+            except Exception as e:
+                self.app.notify(f"Error: {str(e)}", severity="error", timeout=5)
+                dashboard.update(f"Error unenrolling: {str(e)}")
 
     def action_quit(self) -> None:
         """Quit action."""

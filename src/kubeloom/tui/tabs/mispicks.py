@@ -98,7 +98,7 @@ class MispicksTab:
             return
 
         self.is_tailing_logs = True
-        status_widget.update("Status: Running | s: Start | x: Stop | c: Clear")
+        status_widget.update("Status: Running")
 
         # Start background worker
         self.log_tailer_task = asyncio.create_task(
@@ -117,7 +117,7 @@ class MispicksTab:
             self.log_tailer_task.cancel()
             self.log_tailer_task = None
 
-        status_widget.update("Status: Stopped | s: Start | x: Stop | c: Clear")
+        status_widget.update("Status: Stopped")
 
     def clear_errors(self) -> None:
         """Clear all collected errors."""
@@ -163,5 +163,5 @@ class MispicksTab:
             pass
         except Exception as e:
             # Log error and stop tailing
-            status_widget.update(f"Status: Error - {str(e)} | s: Start | x: Stop | c: Clear")
+            status_widget.update(f"Status: Error - {str(e)}")
             self.is_tailing_logs = False

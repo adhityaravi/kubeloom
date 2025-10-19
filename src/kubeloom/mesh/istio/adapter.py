@@ -151,10 +151,11 @@ class IstioAdapter(MeshAdapter):
         return validation
 
     def is_namespace_mesh_enabled(self, namespace: Namespace) -> bool:
-        """Check if namespace has Istio sidecar injection enabled."""
+        """Check if namespace has Istio mesh enabled (sidecar or ambient mode)."""
         return (
-            namespace.has_label("istio-injection", "enabled") or
-            namespace.has_label("istio.io/rev") or
+            namespace.has_label("istio-injection", "enabled") or  # Sidecar mode
+            namespace.has_label("istio.io/rev") or  # Revision-based sidecar mode
+            namespace.has_label("istio.io/dataplane-mode", "ambient") or  # Ambient mode
             namespace.mesh_injection_enabled
         )
 
@@ -216,3 +217,180 @@ class IstioAdapter(MeshAdapter):
         # Tail with adaptive strategy
         async for error in tailer.tail_with_adaptive_strategy():
             yield error
+
+    def is_pod_enrolled(self, pod: dict, namespace: Namespace) -> bool:
+        """
+        Check if a pod is enrolled in Istio mesh.
+
+        Logic:
+        1. If namespace has istio.io/dataplane-mode=ambient → pod is enrolled (unless pod opts out)
+        2. If pod has istio.io/dataplane-mode=ambient → pod is enrolled
+        3. If pod has istio-proxy sidecar → pod is enrolled
+        4. Pod explicitly opts out with istio.io/dataplane-mode=none
+
+        Args:
+            pod: Pod resource dictionary
+            namespace: Namespace object
+
+        Returns:
+            True if pod is enrolled in mesh
+        """
+        pod_labels = pod.get("metadata", {}).get("labels", {})
+        pod_name = pod.get("metadata", {}).get("name", "")
+
+        # Skip Istio system pods
+        if pod_name.startswith("istio-") or pod_name.startswith("ztunnel-"):
+            return False
+
+        # Check if pod explicitly opts out
+        pod_dataplane_mode = pod_labels.get("istio.io/dataplane-mode")
+        if pod_dataplane_mode == "none":
+            return False
+
+        # Check namespace-level enrollment (Ambient mode)
+        if namespace.has_label("istio.io/dataplane-mode", "ambient"):
+            # Namespace is enrolled → pod is enrolled unless it opted out (already checked)
+            return True
+
+        # Check pod-level enrollment (Ambient mode)
+        if pod_dataplane_mode == "ambient":
+            return True
+
+        # Check for sidecar injection (Sidecar mode)
+        containers = pod.get("spec", {}).get("containers", [])
+        for container in containers:
+            if container.get("name") == "istio-proxy":
+                return True
+
+        return False
+
+    async def enroll_pod(self, pod_name: str, namespace: str) -> bool:
+        """
+        Enroll a specific pod in Istio Ambient mesh by labeling it.
+
+        Adds the label istio.io/dataplane-mode=ambient to the pod.
+        Also checks if namespace has a waypoint and enrolls pod to use it.
+
+        Args:
+            pod_name: Name of the pod to enroll
+            namespace: Namespace containing the pod
+
+        Returns:
+            True if enrollment succeeded
+        """
+        try:
+            await self.k8s_client._ensure_connected()
+            assert self.k8s_client._core_v1 is not None
+
+            # Check if namespace has a waypoint
+            waypoint_name = await self._get_namespace_waypoint(namespace)
+
+            # Build labels patch
+            labels = {
+                "istio.io/dataplane-mode": "ambient"
+            }
+
+            # If waypoint exists, add use-waypoint labels
+            if waypoint_name:
+                labels["istio.io/use-waypoint"] = waypoint_name
+                labels["istio.io/use-waypoint-namespace"] = namespace
+
+            # Patch pod to add ambient label (and waypoint if exists)
+            patch = {
+                "metadata": {
+                    "labels": labels
+                }
+            }
+
+            # Run the synchronous k8s API call in executor
+            loop = asyncio.get_event_loop()
+            await loop.run_in_executor(
+                None,
+                lambda: self.k8s_client._core_v1.patch_namespaced_pod(
+                    name=pod_name,
+                    namespace=namespace,
+                    body=patch
+                )
+            )
+
+            return True
+
+        except Exception as e:
+            print(f"Failed to enroll pod {namespace}/{pod_name}: {e}")
+            return False
+
+    async def unenroll_pod(self, pod_name: str, namespace: str) -> bool:
+        """
+        Unenroll a specific pod from Istio Ambient mesh by removing labels.
+
+        Removes the following labels:
+        - istio.io/dataplane-mode
+        - istio.io/use-waypoint (if present)
+        - istio.io/use-waypoint-namespace (if present)
+
+        Args:
+            pod_name: Name of the pod to unenroll
+            namespace: Namespace containing the pod
+
+        Returns:
+            True if unenrollment succeeded
+        """
+        try:
+            await self.k8s_client._ensure_connected()
+            assert self.k8s_client._core_v1 is not None
+
+            # Remove Istio labels using JSON Patch
+            # Use null to remove labels
+            patch = {
+                "metadata": {
+                    "labels": {
+                        "istio.io/dataplane-mode": None,
+                        "istio.io/use-waypoint": None,
+                        "istio.io/use-waypoint-namespace": None
+                    }
+                }
+            }
+
+            # Run the synchronous k8s API call in executor
+            loop = asyncio.get_event_loop()
+            await loop.run_in_executor(
+                None,
+                lambda: self.k8s_client._core_v1.patch_namespaced_pod(
+                    name=pod_name,
+                    namespace=namespace,
+                    body=patch
+                )
+            )
+
+            return True
+
+        except Exception as e:
+            print(f"Failed to unenroll pod {namespace}/{pod_name}: {e}")
+            return False
+
+    async def _get_namespace_waypoint(self, namespace: str) -> Optional[str]:
+        """
+        Check if a waypoint proxy is deployed in the namespace.
+
+        Looks for Gateway resources with gatewayClassName: istio-waypoint.
+
+        Returns:
+            Waypoint Gateway name if one exists, None otherwise
+        """
+        try:
+            # Check for Gateway resources with gatewayClassName: istio-waypoint in this namespace
+            gateways = await self.k8s_client.get_resources(
+                api_version="gateway.networking.k8s.io/v1",
+                kind="Gateway",
+                namespace=namespace
+            )
+
+            for gateway in gateways:
+                spec = gateway.get("spec", {})
+                if spec.get("gatewayClassName") == "istio-waypoint":
+                    return gateway.get("metadata", {}).get("name")
+
+            return None
+
+        except Exception:
+            return None

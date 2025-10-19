@@ -58,6 +58,60 @@ class MeshAdapter(ABC):
         """
         pass
 
+    @abstractmethod
+    def is_pod_enrolled(self, pod: Dict[str, Any], namespace: Namespace) -> bool:
+        """
+        Check if a pod is enrolled in the service mesh.
+
+        Important: If a namespace is mesh-enabled, it's very likely the pod is enrolled
+        (unless the pod explicitly opts out). However, the reverse isn't always true -
+        a pod can be enrolled without the namespace being mesh-enabled (pod-level enrollment).
+
+        Args:
+            pod: Pod resource as a dictionary
+            namespace: Namespace object containing labels and metadata
+
+        Returns:
+            True if pod is enrolled in the mesh, False otherwise
+        """
+        pass
+
+    @abstractmethod
+    async def enroll_pod(self, pod_name: str, namespace: str) -> bool:
+        """
+        Enroll a pod in the service mesh.
+
+        Implementation is mesh-specific. For example:
+        - Istio Ambient: Add labels to namespace or pod
+        - Istio Sidecar: Add injection annotation to namespace or pod
+
+        Args:
+            pod_name: Name of the pod to enroll
+            namespace: Namespace containing the pod
+
+        Returns:
+            True if enrollment succeeded, False otherwise
+        """
+        pass
+
+    @abstractmethod
+    async def unenroll_pod(self, pod_name: str, namespace: str) -> bool:
+        """
+        Unenroll a pod from the service mesh.
+
+        Implementation is mesh-specific. For example:
+        - Istio Ambient: Remove ambient labels from pod
+        - Istio Sidecar: Requires pod restart (not supported)
+
+        Args:
+            pod_name: Name of the pod to unenroll
+            namespace: Namespace containing the pod
+
+        Returns:
+            True if unenrollment succeeded, False otherwise
+        """
+        pass
+
 
 class PolicyAnalyzer(ABC):
     """Interface for policy analysis engines."""

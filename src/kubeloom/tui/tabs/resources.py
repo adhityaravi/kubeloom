@@ -1,18 +1,27 @@
 """Resources tab component."""
 
-from typing import List
+from typing import List, Optional
 from textual.widgets import DataTable
+from rich.text import Text
 
-from ...core.models import Policy
+from ...core.models import Policy, Namespace
 from ...core.services import ResourceInfo
+from ...core.interfaces import MeshAdapter, ClusterClient
 
 
 class ResourcesTab:
     """Resources tab logic."""
 
     @staticmethod
-    def update_table(table: DataTable, resources: List[ResourceInfo], policies: List[Policy]) -> None:
-        """Update the resources table."""
+    async def update_table(
+        table: DataTable,
+        resources: List[ResourceInfo],
+        policies: List[Policy],
+        mesh_adapter: Optional[MeshAdapter] = None,
+        k8s_client: Optional[ClusterClient] = None,
+        current_namespace: Optional[Namespace] = None
+    ) -> None:
+        """Update the resources table with mesh enrollment status."""
         table.clear(columns=True)
 
         table.add_column("Name")
@@ -61,13 +70,35 @@ class ResourcesTab:
                 if len(resource.labels) > 2:
                     labels_str += f"... (+{len(resource.labels) - 2})"
 
-                table.add_row(
-                    resource.name,
-                    resource.type,
-                    resource.service_account or "-",
-                    str(affecting_policies),
-                    labels_str or "-"
-                )
+                # Check mesh enrollment for pods
+                is_enrolled = True
+                if resource.type == "pod" and mesh_adapter and k8s_client and current_namespace:
+                    try:
+                        # Fetch full pod object to check enrollment
+                        pods = await k8s_client.get_resources("v1", "Pod", resource.namespace)
+                        pod = next((p for p in pods if p.get("metadata", {}).get("name") == resource.name), None)
+                        if pod:
+                            is_enrolled = mesh_adapter.is_pod_enrolled(pod, current_namespace)
+                    except Exception:
+                        pass  # If we can't check, assume enrolled
+
+                # Add row with red styling for non-enrolled pods
+                if not is_enrolled:
+                    table.add_row(
+                        Text(resource.name, style="red"),
+                        Text(resource.type, style="red"),
+                        Text(resource.service_account or "-", style="red"),
+                        Text(str(affecting_policies), style="red"),
+                        Text(labels_str or "-", style="red")
+                    )
+                else:
+                    table.add_row(
+                        resource.name,
+                        resource.type,
+                        resource.service_account or "-",
+                        str(affecting_policies),
+                        labels_str or "-"
+                    )
 
     @staticmethod
     def _resource_affected_by_policy(resource: ResourceInfo, policy: Policy) -> bool:
