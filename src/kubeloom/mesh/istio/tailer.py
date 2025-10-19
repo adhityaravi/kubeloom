@@ -52,8 +52,8 @@ class SmartLogTailer:
     This reduces overhead while ensuring we don't miss errors.
     """
 
-    ACTIVE_PHASE_DURATION = 60  # Tail all pods for 60 seconds
-    SELECTIVE_PHASE_DURATION = 300  # Tail only noisy pods for 5 minutes
+    ACTIVE_PHASE_DURATION = 600  # Tail all pods for 10 minutes
+    SELECTIVE_PHASE_DURATION = 0  # Disabled - immediately switch back to active
     MAX_CONCURRENT_TAILS = 100  # Limit concurrent tails
 
     def __init__(self, k8s_client: K8sClient, log_parser: IstioLogParser):

@@ -21,11 +21,12 @@ class MispicksTab:
 
     def init_table(self, table: DataTable) -> None:
         """Initialize the mispicks table columns."""
-        table.add_column("Time", width=20)
-        table.add_column("Type", width=20)
-        table.add_column("Source", width=30)
-        table.add_column("Target", width=30)
-        table.add_column("Reason", width=50)
+        # No width specified - let Textual auto-size based on content
+        table.add_column("Time")
+        table.add_column("Type")
+        table.add_column("Source")
+        table.add_column("Target")
+        table.add_column("Reason")
 
     def update_table(self, table: DataTable) -> None:
         """Update the mispicks table with current errors."""
@@ -36,7 +37,7 @@ class MispicksTab:
         sorted_errors = list(reversed(self.access_errors))
 
         for error in sorted_errors:
-            # Format timestamp
+            # Format timestamp (already in local timezone from K8s logs)
             timestamp_str = error.timestamp.strftime("%Y-%m-%d %H:%M:%S") if error.timestamp else "-"
 
             # Format source

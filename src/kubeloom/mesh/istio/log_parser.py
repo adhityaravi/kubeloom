@@ -14,7 +14,7 @@ class IstioLogParser:
         """Initialize the log parser."""
         # Ztunnel error patterns in the error field
         self.ztunnel_error_patterns = {
-            ErrorType.L4_POLICY_DENIED: [
+            ErrorType.ACCESS_DENIED: [
                 r"connection closed due to policy rejection",
                 r"allow policies exist, but none allowed",
             ],
@@ -26,7 +26,7 @@ class IstioLogParser:
 
         # Waypoint response codes indicating errors
         self.waypoint_error_codes = {
-            403: ErrorType.L7_POLICY_DENIED,
+            403: ErrorType.ACCESS_DENIED,
             401: ErrorType.MTLS_ERROR,
             502: ErrorType.CONNECTION_ERROR,  # Often indicates policy/connection issues
         }
@@ -42,7 +42,7 @@ class IstioLogParser:
         Parse a single log line for access errors.
 
         Args:
-            log_line: Raw log line from pod
+            log_line: Raw log line from pod (may have k8s timestamp prefix)
             pod_name: Name of the pod that produced the log
             pod_namespace: Namespace of the pod
             is_waypoint: True if this is from a waypoint, False for ztunnel
@@ -50,16 +50,37 @@ class IstioLogParser:
         Returns:
             AccessError if an error was detected, None otherwise
         """
+        # Extract k8s timestamp prefix if present (RFC3339 format from kubectl logs --timestamps)
+        # Format: 2024-10-19T12:34:56.789012345Z <actual log line>
+        # or:     2024-10-19T12:34:56.789012345+02:00 <actual log line>
+        k8s_timestamp = None
+        actual_log_line = log_line
+
+        # Check if line starts with RFC3339 timestamp (matches both Z and +HH:MM timezone formats)
+        timestamp_match = re.match(r'^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2}))\s+(.*)$', log_line)
+        if timestamp_match:
+            k8s_timestamp_str = timestamp_match.group(1)
+            actual_log_line = timestamp_match.group(2)
+
+            # Parse k8s timestamp (handles both Z and timezone offsets)
+            try:
+                k8s_timestamp = datetime.fromisoformat(k8s_timestamp_str.replace("Z", "+00:00"))
+            except (ValueError, AttributeError):
+                pass
+
         if is_waypoint:
-            return self._parse_waypoint_log(log_line, pod_name, pod_namespace)
+            error = self._parse_waypoint_log(actual_log_line, pod_name, pod_namespace, k8s_timestamp)
         else:
-            return self._parse_ztunnel_log(log_line, pod_name, pod_namespace)
+            error = self._parse_ztunnel_log(actual_log_line, pod_name, pod_namespace, k8s_timestamp)
+
+        return error
 
     def _parse_ztunnel_log(
         self,
         log_line: str,
         pod_name: str,
-        pod_namespace: str
+        pod_namespace: str,
+        fallback_timestamp: Optional[datetime] = None
     ) -> Optional[AccessError]:
         """
         Parse ztunnel log line (structured key-value format).
@@ -111,9 +132,11 @@ class IstioLogParser:
         dst_namespace = self._unquote(fields.get("dst.namespace", ""))
         dst_service = self._unquote(fields.get("dst.service", ""))
 
-        # Parse timestamp
-        timestamp = None
-        if timestamp_str:
+        # Prefer Kubernetes timestamp (has timezone info) over ztunnel's internal timestamp (always UTC)
+        # Only parse ztunnel timestamp as fallback if K8s timestamp wasn't provided
+        timestamp = fallback_timestamp
+
+        if not timestamp and timestamp_str:
             try:
                 timestamp = datetime.fromisoformat(timestamp_str.replace("Z", "+00:00"))
             except (ValueError, AttributeError):
@@ -140,30 +163,37 @@ class IstioLogParser:
         self,
         log_line: str,
         pod_name: str,
-        pod_namespace: str
+        pod_namespace: str,
+        fallback_timestamp: Optional[datetime] = None
     ) -> Optional[AccessError]:
         """
         Parse waypoint log line (Envoy access log format).
 
         Format: [TIMESTAMP] "METHOD /path HTTP/VERSION" CODE FLAGS ... "USER_AGENT" "REQ_ID" "HOST" "UPSTREAM" ...
         """
-        # Extract timestamp
-        timestamp_match = re.match(r'\[([^\]]+)\]', log_line)
-        timestamp = None
-        if timestamp_match:
-            try:
-                timestamp_str = timestamp_match.group(1)
-                timestamp = datetime.fromisoformat(timestamp_str.replace("Z", "+00:00"))
-            except (ValueError, AttributeError):
-                pass
+        # Prefer Kubernetes timestamp (has timezone info) over Envoy's internal timestamp
+        # Only parse Envoy timestamp as fallback if K8s timestamp wasn't provided
+        timestamp = fallback_timestamp
+
+        if not timestamp:
+            # Try to extract timestamp from Envoy log
+            timestamp_match = re.match(r'\[([^\]]+)\]', log_line)
+            if timestamp_match:
+                try:
+                    timestamp_str = timestamp_match.group(1)
+                    timestamp = datetime.fromisoformat(timestamp_str.replace("Z", "+00:00"))
+                except (ValueError, AttributeError):
+                    pass
 
         # Extract request line: "METHOD /path HTTP/VERSION"
-        request_match = re.search(r'"(GET|POST|PUT|DELETE|PATCH|HEAD|OPTIONS)\s+([^\s]+)\s+HTTP/[^"]*"', log_line)
+        request_match = re.search(r'"(GET|POST|PUT|DELETE|PATCH|HEAD|OPTIONS)\s+([^\s]+)\s+(HTTP/[^"]*)"', log_line)
         method = None
         path = None
+        http_version = None
         if request_match:
             method = request_match.group(1)
             path = request_match.group(2)
+            http_version = request_match.group(3) if request_match.group(3) else None  # e.g., "HTTP/2", "HTTP/1.1"
 
         # Extract response code (comes after the quoted request line)
         code_match = re.search(r'"\s+(\d{3})\s+', log_line)
@@ -210,7 +240,7 @@ class IstioLogParser:
 
         # Generate reason based on response code
         reason_map = {
-            403: "Access denied by L7 authorization policy",
+            403: "Access denied by authorization policy",
             401: "Authentication failed (mTLS error)",
             502: "Bad gateway - possible policy or connection issue",
         }
@@ -224,6 +254,8 @@ class IstioLogParser:
             target_port=target_port,
             http_method=method,
             http_path=path,
+            http_version=http_version,
+            http_status_code=response_code,
             reason=reason,
             raw_message=log_line,
             timestamp=timestamp,

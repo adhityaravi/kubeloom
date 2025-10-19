@@ -99,16 +99,23 @@ class ErrorDetailScreen(Screen):
             if self.error.target_port and not self.error.target_service and not self.error.target_workload:
                 target_ip = f"{target_ip}:{self.error.target_port}"
             content_parts.append(f"  IP Address: {target_ip}")
-        if not any([self.error.target_service, self.error.target_workload, self.error.target_namespace, self.error.target_ip]):
+        # Show port separately if not already included above
+        if self.error.target_port and not any([self.error.target_service, self.error.target_workload, self.error.target_ip]):
+            content_parts.append(f"  Port: {self.error.target_port}")
+        if not any([self.error.target_service, self.error.target_workload, self.error.target_namespace, self.error.target_ip, self.error.target_port]):
             content_parts.append("  [dim]No target information available[/dim]")
 
         # Request Details (L7)
-        if self.error.http_method or self.error.http_path:
+        if self.error.http_method or self.error.http_path or self.error.http_version or self.error.http_status_code:
             content_parts.append("\n[bold cyan]HTTP Request:[/bold cyan]")
             if self.error.http_method:
                 content_parts.append(f"  Method: {self.error.http_method}")
             if self.error.http_path:
                 content_parts.append(f"  Path: {self.error.http_path}")
+            if self.error.http_version:
+                content_parts.append(f"  Protocol: {self.error.http_version}")
+            if self.error.http_status_code:
+                content_parts.append(f"  Status Code: {self.error.http_status_code}")
 
         # Error Reason
         if self.error.reason:

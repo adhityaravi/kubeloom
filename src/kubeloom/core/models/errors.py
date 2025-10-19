@@ -8,9 +8,7 @@ from typing import Optional
 
 class ErrorType(Enum):
     """Type of access error."""
-    L4_POLICY_DENIED = "l4_policy_denied"
-    L7_POLICY_DENIED = "l7_policy_denied"
-    MISSING_POLICY = "missing_policy"
+    ACCESS_DENIED = "access_denied"
     MTLS_ERROR = "mtls_error"
     CONNECTION_ERROR = "connection_error"
     UNKNOWN = "unknown"
@@ -39,6 +37,8 @@ class AccessError:
     # Request details (for L7)
     http_method: Optional[str] = None
     http_path: Optional[str] = None
+    http_version: Optional[str] = None  # e.g., "HTTP/1.1", "HTTP/2"
+    http_status_code: Optional[int] = None  # e.g., 502, 403, 401
 
     # Error details
     reason: str = ""
