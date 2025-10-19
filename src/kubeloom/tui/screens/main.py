@@ -24,6 +24,7 @@ from ...mesh.istio.adapter import IstioAdapter
 from ..widgets import StatusBar, NamespaceSelector
 from .policy_detail import PolicyDetailScreen
 from .resource_detail import ResourceDetailScreen
+from .error_detail import ErrorDetailScreen
 
 
 class MainScreen(Screen):
@@ -582,6 +583,15 @@ ACTIONS:
                 if resource and self.policy_analyzer:
                     self.app.push_screen(ResourceDetailScreen(resource, self.policies, self.policy_analyzer, self.k8s_client))
 
+        elif tabs.active == "mispicks":
+            table = self.query_one("#mispicks-table", DataTable)
+            if table.cursor_row is not None and len(self.access_errors) > 0:
+                # Get the error from the reversed list (since table shows most recent first)
+                sorted_errors = list(reversed(self.access_errors))
+                if table.cursor_row < len(sorted_errors):
+                    error = sorted_errors[table.cursor_row]
+                    self.app.push_screen(ErrorDetailScreen(error))
+
     def on_data_table_cell_selected(self, event: DataTable.CellSelected) -> None:
         """Handle cell selection in DataTable (triggered by Enter key)."""
         if event.data_table.id == "policies-table":
@@ -594,6 +604,13 @@ ACTIONS:
             resource = next((r for r in self.resources if r.name == resource_name), None)
             if resource and self.policy_analyzer:
                 self.app.push_screen(ResourceDetailScreen(resource, self.policies, self.policy_analyzer, self.k8s_client))
+        elif event.data_table.id == "mispicks-table":
+            if len(self.access_errors) > 0:
+                # Get the error from the reversed list (since table shows most recent first)
+                sorted_errors = list(reversed(self.access_errors))
+                if event.coordinate.row < len(sorted_errors):
+                    error = sorted_errors[event.coordinate.row]
+                    self.app.push_screen(ErrorDetailScreen(error))
 
     def action_cursor_up(self) -> None:
         """Move cursor up in focused section."""
@@ -604,6 +621,9 @@ ACTIONS:
                 table.action_cursor_up()
             elif tabs.active == "resources":
                 table = self.query_one("#resources-table", DataTable)
+                table.action_cursor_up()
+            elif tabs.active == "mispicks":
+                table = self.query_one("#mispicks-table", DataTable)
                 table.action_cursor_up()
         elif self.focused_section == "tree":
             tabs = self.query_one("#main-tabs", TabbedContent)
@@ -623,6 +643,9 @@ ACTIONS:
                 table.action_cursor_down()
             elif tabs.active == "resources":
                 table = self.query_one("#resources-table", DataTable)
+                table.action_cursor_down()
+            elif tabs.active == "mispicks":
+                table = self.query_one("#mispicks-table", DataTable)
                 table.action_cursor_down()
         elif self.focused_section == "tree":
             tabs = self.query_one("#main-tabs", TabbedContent)
