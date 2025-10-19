@@ -9,6 +9,7 @@ from typing import Optional
 class ErrorType(Enum):
     """Type of access error."""
     ACCESS_DENIED = "access_denied"
+    SOURCE_NOT_ON_MESH = "source_not_on_mesh"
     MTLS_ERROR = "mtls_error"
     CONNECTION_ERROR = "connection_error"
     UNKNOWN = "unknown"

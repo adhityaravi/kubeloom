@@ -43,6 +43,8 @@ class MainScreen(Screen):
         Binding("c", "clear_mispicks", "Clear Errors", show=False),
         Binding("e", "enroll_pod", "Enroll Pod", show=False),
         Binding("u", "unenroll_pod", "Unenroll Pod", show=False),
+        Binding("w", "weave_policy", "Weave Policy", show=False),
+        Binding("W", "unweave_policies", "Unweave All", show=False),
     ]
 
     def __init__(self):
@@ -92,7 +94,7 @@ class MainScreen(Screen):
                     with Vertical():
                         yield DataTable(id="mispicks-table", zebra_stripes=True)
                         with Horizontal(id="mispicks-footer-container"):
-                            yield Static("s: Start | x: Stop | c: Clear", id="mispicks-keybindings")
+                            yield Static("s: Start | x: Stop | c: Clear | w: Weave | W: Unweave All", id="mispicks-keybindings")
                             yield Static("Status: Not running", id="tailing-status")
 
                 with TabPane("Conflicts", id="conflicts"):
@@ -294,6 +296,9 @@ ACTIONS:
             table = self.query_one("#policies-table", DataTable)
             if table.cursor_row is not None:
                 policy_name = table.get_row_at(table.cursor_row)[0]
+                # Handle Rich Text objects (used for cyan-colored woven policies)
+                if hasattr(policy_name, "plain"):
+                    policy_name = policy_name.plain
                 policy = next((p for p in self.policies if p.name == policy_name), None)
                 if policy:
                     self.app.push_screen(PolicyDetailScreen(policy, self.k8s_client))
@@ -320,6 +325,9 @@ ACTIONS:
         """Handle cell selection in DataTable (triggered by Enter key)."""
         if event.data_table.id == "policies-table":
             policy_name = event.data_table.get_row_at(event.coordinate.row)[0]
+            # Handle Rich Text objects (used for cyan-colored woven policies)
+            if hasattr(policy_name, "plain"):
+                policy_name = policy_name.plain
             policy = next((p for p in self.policies if p.name == policy_name), None)
             if policy:
                 self.app.push_screen(PolicyDetailScreen(policy, self.k8s_client))
@@ -573,6 +581,86 @@ ACTIONS:
             except Exception as e:
                 self.app.notify(f"Error: {str(e)}", severity="error", timeout=5)
                 dashboard.update(f"Error unenrolling: {str(e)}")
+
+    async def action_weave_policy(self) -> None:
+        """Weave policy from selected error (only in Mispicks tab)."""
+        tabs = self.query_one("#main-tabs", TabbedContent)
+        if tabs.active != "mispicks":
+            return
+
+        table = self.query_one("#mispicks-table", DataTable)
+        if table.cursor_row is None:
+            return
+
+        # Get the selected error
+        error = self.mispicks_tab.get_error_at_row(table.cursor_row)
+        if not error:
+            return
+
+        # Check error type - only ACCESS_DENIED can be woven
+        if error.error_type.value == "source_not_on_mesh":
+            self.app.notify(
+                "Source pod is not enrolled in mesh - enroll the source pod first before creating policies",
+                severity="warning",
+                timeout=5
+            )
+            return
+        elif error.error_type.value != "access_denied":
+            self.app.notify(
+                f"Can only weave policies for access_denied errors, not {error.error_type.value}",
+                severity="warning",
+                timeout=5
+            )
+            return
+
+        # Weave the policy
+        if self.mesh_adapter:
+            try:
+                self.app.notify("Weaving policy...", severity="information", timeout=2)
+
+                policy = await self.mesh_adapter.weave_policy(error)
+
+                if policy:
+                    policy_type = policy.labels.get("kubeloom.io/policy-type", "unknown")
+                    self.app.notify(
+                        f"Policy {policy.name} ({policy_type}) woven successfully!",
+                        severity="information",
+                        timeout=5
+                    )
+
+                    # Refresh policies to show the new woven policy
+                    await self._refresh_policies()
+                else:
+                    self.app.notify("Failed to weave policy", severity="warning", timeout=5)
+
+            except Exception as e:
+                self.app.notify(f"Error weaving policy: {str(e)}", severity="error", timeout=5)
+
+    async def action_unweave_policies(self) -> None:
+        """Unweave all kubeloom-managed policies."""
+        if not self.mesh_adapter:
+            return
+
+        try:
+            self.app.notify("Unweaving all kubeloom policies...", severity="information", timeout=2)
+
+            # Unweave policies from all namespaces
+            removed_count = await self.mesh_adapter.unweave_policies()
+
+            if removed_count > 0:
+                self.app.notify(
+                    f"Successfully removed {removed_count} woven {'policy' if removed_count == 1 else 'policies'}",
+                    severity="information",
+                    timeout=5
+                )
+
+                # Refresh policies to reflect the changes
+                await self._refresh_policies()
+            else:
+                self.app.notify("No woven policies found to remove", severity="information", timeout=3)
+
+        except Exception as e:
+            self.app.notify(f"Error unweaving policies: {str(e)}", severity="error", timeout=5)
 
     def action_quit(self) -> None:
         """Quit action."""

@@ -22,13 +22,22 @@ class IstioLogParser:
                 r"http status: 401 Unauthorized",
                 r"tls|certificate|mtls",
             ],
+            ErrorType.CONNECTION_ERROR: [
+                r"http status: 503 Service Unavailable",
+                r"http status: 502 Bad Gateway",
+                r"http status: 504 Gateway Timeout",
+                r"connection reset",
+                r"connection refused",
+            ],
         }
 
         # Waypoint response codes indicating errors
         self.waypoint_error_codes = {
             403: ErrorType.ACCESS_DENIED,
             401: ErrorType.MTLS_ERROR,
-            502: ErrorType.CONNECTION_ERROR,  # Often indicates policy/connection issues
+            502: ErrorType.CONNECTION_ERROR,  # Bad Gateway
+            503: ErrorType.CONNECTION_ERROR,  # Service Unavailable
+            504: ErrorType.CONNECTION_ERROR,  # Gateway Timeout
         }
 
     def parse_log_line(
@@ -125,6 +134,11 @@ class IstioLogParser:
         src_workload = self._unquote(fields.get("src.workload", ""))
         src_namespace = self._unquote(fields.get("src.namespace", ""))
 
+        # If source has no workload identity, it's not enrolled in the mesh
+        # Reclassify ACCESS_DENIED as SOURCE_NOT_ON_MESH
+        if error_type == ErrorType.ACCESS_DENIED and not src_workload:
+            error_type = ErrorType.SOURCE_NOT_ON_MESH
+
         # Extract destination info
         dst_addr = fields.get("dst.addr", "")
         dst_ip, dst_port = self._split_addr(dst_addr)
@@ -209,9 +223,12 @@ class IstioLogParser:
         error_type = self.waypoint_error_codes[response_code]
 
         # Extract host (service): "host:port"
-        host_match = re.search(r'"([^"]+:\d+)"\s+"envoy://', log_line)
+        # The host/authority appears as a quoted string with .svc.cluster.local:port
+        # It typically appears after the request ID (UUID) in the log line
+        host_match = re.search(r'"([a-z0-9.-]+\.svc\.cluster\.local:\d+)"', log_line)
         target_service = host_match.group(1) if host_match else None
         target_port = None
+        target_namespace = None
         if target_service and ":" in target_service:
             parts = target_service.rsplit(":", 1)
             target_service = parts[0]
@@ -219,6 +236,13 @@ class IstioLogParser:
                 target_port = int(parts[1])
             except (ValueError, IndexError):
                 pass
+
+        # Extract namespace from FQDN service name (e.g., "service.namespace.svc.cluster.local")
+        if target_service and ".svc.cluster.local" in target_service:
+            service_parts = target_service.split(".")
+            if len(service_parts) >= 2:
+                target_namespace = service_parts[1]  # namespace is second part
+                target_service = service_parts[0]  # service name is first part
 
         # Extract upstream (target): "envoy://connect_originate/IP:PORT"
         upstream_match = re.search(r'"envoy://connect_originate/([^"]+)"', log_line)
@@ -242,14 +266,21 @@ class IstioLogParser:
         reason_map = {
             403: "Access denied by authorization policy",
             401: "Authentication failed (mTLS error)",
-            502: "Bad gateway - possible policy or connection issue",
+            502: "Bad gateway - connection issue",
+            503: "Service unavailable - destination not ready",
+            504: "Gateway timeout - destination not responding",
         }
         reason = reason_map.get(response_code, f"HTTP {response_code}")
+
+        # NOTE: Waypoint logs don't include source workload identity
+        # We only have source IP - we'll resolve this to a pod and check mesh enrollment
+        # when attempting to weave a policy (not during parsing)
 
         return AccessError(
             error_type=error_type,
             source_ip=source_ip,
             target_service=target_service,
+            target_namespace=target_namespace,
             target_ip=target_ip,
             target_port=target_port,
             http_method=method,

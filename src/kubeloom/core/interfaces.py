@@ -112,6 +112,50 @@ class MeshAdapter(ABC):
         """
         pass
 
+    @abstractmethod
+    async def weave_policy(self, error: AccessError) -> Optional[Policy]:
+        """
+        Auto-generate a minimal policy to resolve an access error.
+
+        Strategy (mesh-specific):
+        - Generate the most minimal policy that can resolve the error
+        - For Istio: L7 policy if HTTP details available, L4 policy otherwise
+        - Label policy with kubeloom.io/managed=true for tracking
+
+        Args:
+            error: AccessError to resolve
+
+        Returns:
+            Generated Policy object if successful, None otherwise
+        """
+        pass
+
+    @abstractmethod
+    async def unweave_policies(self, namespace: Optional[str] = None) -> int:
+        """
+        Remove all kubeloom-managed policies.
+
+        Args:
+            namespace: Optional namespace to filter. If None, remove from all namespaces.
+
+        Returns:
+            Number of policies removed
+        """
+        pass
+
+    @abstractmethod
+    async def get_woven_policies(self, namespace: str) -> List[Policy]:
+        """
+        Get all kubeloom-managed (woven) policies in a namespace.
+
+        Args:
+            namespace: Namespace to query
+
+        Returns:
+            List of woven Policy objects
+        """
+        pass
+
 
 class PolicyAnalyzer(ABC):
     """Interface for policy analysis engines."""

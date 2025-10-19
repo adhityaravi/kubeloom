@@ -6,6 +6,7 @@ from typing import Dict, Optional, AsyncIterator, List, Set
 from dataclasses import dataclass
 
 from ...core.models import AccessError
+from ...core.models.errors import ErrorType
 from ...k8s.client import K8sClient
 from .log_parser import IstioLogParser
 
@@ -56,9 +57,10 @@ class SmartLogTailer:
     SELECTIVE_PHASE_DURATION = 0  # Disabled - immediately switch back to active
     MAX_CONCURRENT_TAILS = 100  # Limit concurrent tails
 
-    def __init__(self, k8s_client: K8sClient, log_parser: IstioLogParser):
+    def __init__(self, k8s_client: K8sClient, log_parser: IstioLogParser, mesh_adapter=None):
         self.k8s_client = k8s_client
         self.log_parser = log_parser
+        self.mesh_adapter = mesh_adapter  # Optional mesh adapter for enrollment checks
         self.pod_states: Dict[str, PodTailState] = {}
         self.active_tasks: Dict[str, asyncio.Task] = {}
         self.error_queue: asyncio.Queue[Optional[AccessError]] = asyncio.Queue()
@@ -231,12 +233,15 @@ class SmartLogTailer:
                 )
 
                 if error:
+                    # Enrich error with source pod info if only IP is available
+                    enriched_error = await self._enrich_error(error)
+
                     # Update pod state
-                    pod_state.last_error_time = error.timestamp or datetime.now()
+                    pod_state.last_error_time = enriched_error.timestamp or datetime.now()
                     pod_state.error_count += 1
 
                     # Push to queue
-                    await self.error_queue.put(error)
+                    await self.error_queue.put(enriched_error)
 
         except asyncio.CancelledError:
             pass
@@ -247,6 +252,97 @@ class SmartLogTailer:
             pod_state.is_active = False
             if pod_state.pod_key in self.active_tasks:
                 del self.active_tasks[pod_state.pod_key]
+
+    async def _enrich_error(self, error: AccessError) -> AccessError:
+        """
+        Enrich error by resolving source IP to pod and checking mesh enrollment.
+
+        For all ACCESS_DENIED errors with source_ip:
+        - Resolve IP to pod (if not already known)
+        - Check if pod is enrolled in mesh
+        - Reclassify as SOURCE_NOT_ON_MESH if not enrolled
+        - Enrich with workload info and SA if enrolled
+
+        Args:
+            error: The parsed error
+
+        Returns:
+            Enriched error with proper classification
+        """
+        # Only enrich ACCESS_DENIED errors that have source_ip
+        if error.error_type != ErrorType.ACCESS_DENIED or not error.source_ip:
+            return error
+
+        # Skip if we don't have mesh adapter (can't check enrollment)
+        if not self.mesh_adapter:
+            return error
+
+        try:
+            # Resolve IP to pod if we don't have workload info
+            pod = None
+            if not error.source_workload:
+                pod = await self.k8s_client.find_pod_by_ip(error.source_ip)
+
+                if not pod:
+                    # Could not resolve IP - reclassify as SOURCE_NOT_ON_MESH
+                    error.error_type = ErrorType.SOURCE_NOT_ON_MESH
+                    error.reason = f"Source pod with IP {error.source_ip} not found"
+                    return error
+
+                # Extract pod details
+                metadata = pod.get("metadata", {})
+                error.source_workload = metadata.get("name")
+                error.source_namespace = metadata.get("namespace")
+            else:
+                # We have workload info from log, look up the pod to verify enrollment
+                if error.source_namespace:
+                    # Get pod by name and namespace
+                    pod = await self.k8s_client.get_pod(
+                        name=error.source_workload,
+                        namespace=error.source_namespace
+                    )
+
+                    if not pod:
+                        # Pod not found - likely deleted or workload name is incorrect
+                        error.error_type = ErrorType.SOURCE_NOT_ON_MESH
+                        error.reason = f"Source pod {error.source_namespace}/{error.source_workload} not found"
+                        return error
+
+            # Check if pod is enrolled in mesh
+            if pod:
+                # Get namespace object
+                namespaces = await self.k8s_client.get_namespaces()
+                pod_ns_obj = next((ns for ns in namespaces if ns.name == error.source_namespace), None)
+
+                if pod_ns_obj:
+                    is_enrolled = self.mesh_adapter.is_pod_enrolled(pod, pod_ns_obj)
+
+                    if not is_enrolled:
+                        # Pod not enrolled - reclassify
+                        error.error_type = ErrorType.SOURCE_NOT_ON_MESH
+                        error.reason = f"Source pod {error.source_namespace}/{error.source_workload} is not enrolled in mesh"
+                        return error
+
+                    # Pod is enrolled - enrich with service account if we don't have it
+                    if not error.source_service_account:
+                        spec = pod.get("spec", {})
+                        # Get SA from pod spec, default to "default" if not specified
+                        # DO NOT use pod name as fallback - that's wrong!
+                        # Note: Kubernetes Python client uses snake_case for field names
+                        sa_name = spec.get("service_account_name")
+
+                        if sa_name:
+                            error.source_service_account = sa_name
+                        else:
+                            # Pod doesn't have SA specified, Kubernetes uses "default"
+                            error.source_service_account = "default"
+                            print(f"Warning: Pod {error.source_namespace}/{error.source_workload} has no service_account_name in spec, using 'default'")
+
+        except Exception as e:
+            # On error, keep original classification but log
+            print(f"Error enriching access error: {e}")
+
+        return error
 
     async def _collect_errors(self) -> None:
         """Monitor active tasks and handle completions."""

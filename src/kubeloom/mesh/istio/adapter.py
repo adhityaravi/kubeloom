@@ -1,6 +1,7 @@
 """Istio service mesh adapter."""
 
 import asyncio
+import logging
 from typing import List, Optional, AsyncIterator
 
 from ...core.interfaces import MeshAdapter
@@ -10,6 +11,14 @@ from .detector import IstioDetector
 from .converter import IstioConverter
 from .log_parser import IstioLogParser
 from .tailer import SmartLogTailer
+from .weaver import IstioPolicyWeaver
+
+# Set up logging to file
+logging.basicConfig(
+    filename='/tmp/kubeloom-weave.log',
+    level=logging.DEBUG,
+    format='%(asctime)s - %(levelname)s - %(message)s'
+)
 
 
 class IstioAdapter(MeshAdapter):
@@ -76,6 +85,7 @@ class IstioAdapter(MeshAdapter):
         self.detector = IstioDetector(k8s_client)
         self.converter = IstioConverter()
         self.log_parser = IstioLogParser()
+        self.weaver = IstioPolicyWeaver(k8s_client)
 
     async def detect(self) -> Optional[ServiceMesh]:
         """Detect if Istio is installed in the cluster."""
@@ -204,6 +214,7 @@ class IstioAdapter(MeshAdapter):
         - Discovers all ztunnel and waypoint pods across all namespaces
         - Uses adaptive tailing (1min all pods, 5min noisy pods, repeat)
         - Handles pod lifecycle and memory efficiently
+        - Enriches errors by resolving source IPs and checking mesh enrollment
 
         Args:
             namespace: Optional namespace filter (currently unused, always tails all)
@@ -211,8 +222,8 @@ class IstioAdapter(MeshAdapter):
         Yields:
             AccessError objects as they are parsed from logs.
         """
-        # Create smart tailer
-        tailer = SmartLogTailer(self.k8s_client, self.log_parser)
+        # Create smart tailer with mesh adapter for enrollment checks
+        tailer = SmartLogTailer(self.k8s_client, self.log_parser, mesh_adapter=self)
 
         # Tail with adaptive strategy
         async for error in tailer.tail_with_adaptive_strategy():
@@ -279,9 +290,6 @@ class IstioAdapter(MeshAdapter):
             True if enrollment succeeded
         """
         try:
-            await self.k8s_client._ensure_connected()
-            assert self.k8s_client._core_v1 is not None
-
             # Check if namespace has a waypoint
             waypoint_name = await self._get_namespace_waypoint(namespace)
 
@@ -302,15 +310,10 @@ class IstioAdapter(MeshAdapter):
                 }
             }
 
-            # Run the synchronous k8s API call in executor
-            loop = asyncio.get_event_loop()
-            await loop.run_in_executor(
-                None,
-                lambda: self.k8s_client._core_v1.patch_namespaced_pod(
-                    name=pod_name,
-                    namespace=namespace,
-                    body=patch
-                )
+            await self.k8s_client.patch_pod(
+                name=pod_name,
+                namespace=namespace,
+                body=patch
             )
 
             return True
@@ -336,9 +339,6 @@ class IstioAdapter(MeshAdapter):
             True if unenrollment succeeded
         """
         try:
-            await self.k8s_client._ensure_connected()
-            assert self.k8s_client._core_v1 is not None
-
             # Remove Istio labels using JSON Patch
             # Use null to remove labels
             patch = {
@@ -351,15 +351,10 @@ class IstioAdapter(MeshAdapter):
                 }
             }
 
-            # Run the synchronous k8s API call in executor
-            loop = asyncio.get_event_loop()
-            await loop.run_in_executor(
-                None,
-                lambda: self.k8s_client._core_v1.patch_namespaced_pod(
-                    name=pod_name,
-                    namespace=namespace,
-                    body=patch
-                )
+            await self.k8s_client.patch_pod(
+                name=pod_name,
+                namespace=namespace,
+                body=patch
             )
 
             return True
@@ -394,3 +389,145 @@ class IstioAdapter(MeshAdapter):
 
         except Exception:
             return None
+
+    async def weave_policy(self, error: AccessError) -> Optional[Policy]:
+        """
+        Auto-generate a minimal policy to resolve an access error.
+
+        Creates either an L4 (ztunnel) or L7 (waypoint) AuthorizationPolicy
+        based on the error details and applies it to the cluster.
+
+        Args:
+            error: AccessError to resolve
+
+        Returns:
+            Generated Policy object if successful, None otherwise
+        """
+        try:
+            # Generate policy using weaver
+            logging.debug(f"Generating policy for error: {error.source_workload} -> {error.target_service or error.target_workload}")
+            logging.debug(f"Error details - source_namespace: {error.source_namespace}, target_namespace: {error.target_namespace}, target_port: {error.target_port}")
+
+            policy = await self.weaver.weave_policy(error)
+            logging.debug(f"Generated policy: {policy.name} in namespace {policy.namespace}")
+
+            # Convert Policy object to Istio AuthorizationPolicy manifest
+            manifest = self.converter.export_authorization_policy(policy)
+            logging.debug(f"Converted to manifest: {manifest.get('metadata', {}).get('name')}")
+            logging.debug(f"Manifest: {manifest}")
+
+            # Apply the manifest to the cluster
+            logging.debug(f"Applying manifest to cluster in namespace {policy.namespace}...")
+            result = await self.k8s_client.create_custom_object(
+                group="security.istio.io",
+                version="v1",
+                namespace=policy.namespace,
+                plural="authorizationpolicies",
+                body=manifest
+            )
+
+            logging.debug(f"Policy applied successfully, result: {result}")
+
+            # Fetch the created policy to get full metadata
+            created_policy = await self.get_policy(
+                policy.name,
+                policy.namespace,
+                PolicyType.AUTHORIZATION_POLICY.value
+            )
+
+            return created_policy or policy
+
+        except Exception as e:
+            import traceback
+            logging.error(f"Failed to weave policy: {e}")
+            logging.error(f"Traceback: {traceback.format_exc()}")
+            return None
+
+    async def unweave_policies(self, namespace: Optional[str] = None) -> int:
+        """
+        Remove all kubeloom-managed policies.
+
+        Args:
+            namespace: Optional namespace to filter. If None, remove from all namespaces.
+
+        Returns:
+            Number of policies removed
+        """
+        try:
+            removed_count = 0
+
+            # Get list of namespaces to process
+            if namespace:
+                namespaces_to_process = [namespace]
+            else:
+                # Get all namespaces
+                ns_objects = await self.k8s_client.get_namespaces()
+                namespaces_to_process = [ns.name for ns in ns_objects]
+
+            # For each namespace, find and delete kubeloom-managed AuthorizationPolicies
+            for ns in namespaces_to_process:
+                try:
+                    # Get all AuthorizationPolicies in namespace
+                    policies_response = await self.k8s_client.list_custom_objects(
+                        group="security.istio.io",
+                        version="v1",
+                        namespace=ns,
+                        plural="authorizationpolicies",
+                        label_selector=f"{IstioPolicyWeaver.MANAGED_LABEL}={IstioPolicyWeaver.MANAGED_LABEL_VALUE}"
+                    )
+
+                    # Delete each managed policy
+                    for item in policies_response.get("items", []):
+                        policy_name = item.get("metadata", {}).get("name")
+                        if policy_name:
+                            await self.k8s_client.delete_custom_object(
+                                group="security.istio.io",
+                                version="v1",
+                                namespace=ns,
+                                plural="authorizationpolicies",
+                                name=policy_name
+                            )
+                            removed_count += 1
+
+                except Exception as e:
+                    print(f"Failed to unweave policies in namespace {ns}: {e}")
+                    continue
+
+            return removed_count
+
+        except Exception as e:
+            print(f"Failed to unweave policies: {e}")
+            return 0
+
+    async def get_woven_policies(self, namespace: str) -> List[Policy]:
+        """
+        Get all kubeloom-managed (woven) policies in a namespace.
+
+        Args:
+            namespace: Namespace to query
+
+        Returns:
+            List of woven Policy objects
+        """
+        try:
+            # Get all AuthorizationPolicies with kubeloom label
+            policies_response = await self.k8s_client.list_custom_objects(
+                group="security.istio.io",
+                version="v1",
+                namespace=namespace,
+                plural="authorizationpolicies",
+                label_selector=f"{IstioPolicyWeaver.MANAGED_LABEL}={IstioPolicyWeaver.MANAGED_LABEL_VALUE}"
+            )
+
+            # Convert to Policy objects
+            woven_policies = []
+            for item in policies_response.get("items", []):
+                policy = self.converter.convert_authorization_policy(item)
+                if policy:
+                    woven_policies.append(policy)
+
+            return woven_policies
+
+        except Exception as e:
+            print(f"Failed to get woven policies: {e}")
+            return []

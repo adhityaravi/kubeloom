@@ -399,3 +399,118 @@ class IstioConverter:
                 targets.append(target)
 
         return targets
+
+    def export_authorization_policy(self, policy: Policy) -> Dict[str, Any]:
+        """
+        Export a Policy object to an Istio AuthorizationPolicy manifest.
+
+        Handles both L4 (ztunnel) and L7 (waypoint) policies:
+        - L4: Uses selector with matchLabels
+        - L7: Uses targetRefs to target services
+
+        Args:
+            policy: Policy object to export
+
+        Returns:
+            Dictionary containing the AuthorizationPolicy manifest
+        """
+        manifest = {
+            "apiVersion": "security.istio.io/v1",
+            "kind": "AuthorizationPolicy",
+            "metadata": {
+                "name": policy.name,
+                "namespace": policy.namespace,
+                "labels": dict(policy.labels) if policy.labels else {},
+                "annotations": dict(policy.annotations) if policy.annotations else {},
+            },
+            "spec": {}
+        }
+
+        # Add action
+        if policy.action:
+            if policy.action.type == ActionType.DENY:
+                manifest["spec"]["action"] = "DENY"
+            elif policy.action.type == ActionType.AUDIT:
+                manifest["spec"]["action"] = "AUDIT"
+            else:
+                manifest["spec"]["action"] = "ALLOW"
+
+        # Determine if this is L4 or L7 based on labels
+        is_l7 = policy.labels.get("kubeloom.io/policy-type") == "l7"
+
+        # Add target - use targetRefs for L7, selector for L4
+        if policy.targets:
+            if is_l7:
+                # L7: Use targetRefs to target service
+                target_refs = []
+                for target in policy.targets:
+                    if target.services:
+                        for service in target.services:
+                            target_refs.append({
+                                "kind": "Service",
+                                "group": "",
+                                "name": service
+                            })
+                if target_refs:
+                    manifest["spec"]["targetRefs"] = target_refs
+            else:
+                # L4: Use selector with matchLabels
+                if policy.targets[0].workload_labels:
+                    manifest["spec"]["selector"] = {
+                        "matchLabels": dict(policy.targets[0].workload_labels)
+                    }
+
+        # Add rules
+        rules = []
+        rule = {}
+
+        # Add 'from' section if source exists
+        if policy.source and not policy.source.is_empty():
+            from_items = []
+            source_item = {"source": {}}
+
+            if policy.source.principals:
+                source_item["source"]["principals"] = list(policy.source.principals)
+            if policy.source.namespaces:
+                source_item["source"]["namespaces"] = list(policy.source.namespaces)
+            if policy.source.ip_blocks:
+                source_item["source"]["ipBlocks"] = list(policy.source.ip_blocks)
+
+            from_items.append(source_item)
+            rule["from"] = from_items
+
+        # Add 'to' section from allowed_routes
+        if policy.allowed_routes:
+            to_items = []
+            has_any_constraints = False
+
+            for route in policy.allowed_routes:
+                operation = {}
+
+                # Only add HTTP methods/paths for L7 policies
+                if is_l7:
+                    if route.methods:
+                        operation["methods"] = [m.value for m in route.methods]
+                        has_any_constraints = True
+                    if route.paths:
+                        operation["paths"] = list(route.paths)
+                        has_any_constraints = True
+
+                # Ports can be used in both L4 and L7
+                if route.ports:
+                    operation["ports"] = [str(p) for p in route.ports]
+                    has_any_constraints = True
+
+                to_items.append({"operation": operation})
+
+            # Only add 'to' clause if there are actual constraints
+            # Empty operation {} should omit the 'to' clause entirely (allow all operations)
+            if has_any_constraints:
+                rule["to"] = to_items
+            # If no constraints, omit 'to' clause entirely (allow all operations)
+
+        if rule:
+            rules.append(rule)
+            manifest["spec"]["rules"] = rules
+
+        return manifest
