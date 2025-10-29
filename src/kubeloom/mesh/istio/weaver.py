@@ -1,14 +1,22 @@
 """Policy weaving - auto-generate minimal AuthorizationPolicies from access errors."""
 
+import contextlib
 from datetime import datetime
-from typing import Set, Optional, Dict
 
-from ...core.models import (
-    Policy, PolicyType, ServiceMeshType, PolicyStatus,
-    PolicySource, PolicyTarget, AllowedRoute, HTTPMethod, PolicyAction, ActionType
+from kubeloom.core.models import (
+    ActionType,
+    AllowedRoute,
+    HTTPMethod,
+    Policy,
+    PolicyAction,
+    PolicySource,
+    PolicyStatus,
+    PolicyTarget,
+    PolicyType,
+    ServiceMeshType,
 )
-from ...core.models.errors import AccessError
-from ...k8s.client import K8sClient
+from kubeloom.core.models.errors import AccessError
+from kubeloom.k8s.client import K8sClient
 
 
 class IstioPolicyWeaver:
@@ -65,9 +73,17 @@ class IstioPolicyWeaver:
 
         # Build annotations
         annotations = {
-            "kubeloom.io/source": f"{error.source_namespace}/{error.source_workload}" if error.source_workload else error.source_ip or "unknown",
-            "kubeloom.io/target": f"{error.target_namespace}/{error.target_workload}" if error.target_workload else error.target_service or "unknown",
-            "kubeloom.io/description": f"Auto-generated to allow {error.http_method or 'HTTP'} {error.http_path or '/'}"
+            "kubeloom.io/source": (
+                f"{error.source_namespace}/{error.source_workload}"
+                if error.source_workload
+                else error.source_ip or "unknown"
+            ),
+            "kubeloom.io/target": (
+                f"{error.target_namespace}/{error.target_workload}"
+                if error.target_workload
+                else error.target_service or "unknown"
+            ),
+            "kubeloom.io/description": f"Auto-generated to allow {error.http_method or 'HTTP'} {error.http_path or '/'}",
         }
 
         # Build source (from clause)
@@ -77,32 +93,23 @@ class IstioPolicyWeaver:
             # Use actual service account, fallback to workload name if not available
             sa_name = error.source_service_account or error.source_workload
             principal = f"cluster.local/ns/{error.source_namespace}/sa/{sa_name}"
-            source = PolicySource(
-                principals=[principal],
-                service_accounts=[sa_name]
-            )
+            source = PolicySource(principals=[principal], service_accounts=[sa_name])
 
         # Build allowed route (to clause with operation)
-        methods: Set[HTTPMethod] = set()
+        methods: set[HTTPMethod] = set()
         if error.http_method:
-            try:
+            with contextlib.suppress(ValueError):
                 methods.add(HTTPMethod(error.http_method))
-            except ValueError:
-                pass  # Unknown HTTP method
 
         paths = [error.http_path] if error.http_path else []
 
         # Skip port filter for Istio's internal HBONE port (15008)
         # This port is used for tunneling - we should allow all ports
-        ports = None
+        ports: list[int] = []
         if error.target_port and error.target_port != self.ISTIO_HBONE_PORT:
             ports = [error.target_port]
 
-        allowed_routes = [AllowedRoute(
-            methods=methods if methods else None,
-            paths=paths if paths else None,
-            ports=ports
-        )]
+        allowed_routes = [AllowedRoute(methods=methods or set(), paths=paths or [], ports=ports)]
 
         # Build target (targetRefs - for L7 we target the service)
         target = None
@@ -125,7 +132,7 @@ class IstioPolicyWeaver:
             action=PolicyAction(type=ActionType.ALLOW),
             source=source,
             targets=[target] if target else [],
-            allowed_routes=allowed_routes
+            allowed_routes=allowed_routes,
         )
 
         return policy
@@ -149,9 +156,17 @@ class IstioPolicyWeaver:
 
         # Build annotations
         annotations = {
-            "kubeloom.io/source": f"{error.source_namespace}/{error.source_workload}" if error.source_workload else error.source_ip or "unknown",
-            "kubeloom.io/target": f"{error.target_namespace}/{error.target_workload}" if error.target_workload else error.target_service or "unknown",
-            "kubeloom.io/description": f"Auto-generated to allow port {error.target_port or 'any'}"
+            "kubeloom.io/source": (
+                f"{error.source_namespace}/{error.source_workload}"
+                if error.source_workload
+                else error.source_ip or "unknown"
+            ),
+            "kubeloom.io/target": (
+                f"{error.target_namespace}/{error.target_workload}"
+                if error.target_workload
+                else error.target_service or "unknown"
+            ),
+            "kubeloom.io/description": f"Auto-generated to allow port {error.target_port or 'any'}",
         }
 
         # Build source (from clause)
@@ -161,20 +176,15 @@ class IstioPolicyWeaver:
             # Use actual service account, fallback to workload name if not available
             sa_name = error.source_service_account or error.source_workload
             principal = f"cluster.local/ns/{error.source_namespace}/sa/{sa_name}"
-            source = PolicySource(
-                principals=[principal],
-                service_accounts=[sa_name]
-            )
+            source = PolicySource(principals=[principal], service_accounts=[sa_name])
 
         # Skip port filter for Istio's internal HBONE port (15008)
         # This port is used for tunneling - we should allow all ports
-        ports = None
+        ports: list[int] = []
         if error.target_port and error.target_port != self.ISTIO_HBONE_PORT:
             ports = [error.target_port]
 
-        allowed_routes = [AllowedRoute(
-            ports=ports
-        )]
+        allowed_routes = [AllowedRoute(ports=ports)]
 
         # Build target (selector - for L4 we query actual pod labels)
         target = None
@@ -201,12 +211,12 @@ class IstioPolicyWeaver:
             action=PolicyAction(type=ActionType.ALLOW),
             source=source,
             targets=[target] if target else [],
-            allowed_routes=allowed_routes
+            allowed_routes=allowed_routes,
         )
 
         return policy
 
-    async def _get_target_pod_labels(self, error: AccessError) -> Optional[Dict[str, str]]:
+    async def _get_target_pod_labels(self, error: AccessError) -> dict[str, str] | None:
         """
         Query the target pod and extract unique identifying labels.
 
@@ -227,10 +237,7 @@ class IstioPolicyWeaver:
 
         try:
             # Query the target pod
-            pod = await self.k8s_client.get_pod(
-                name=error.target_workload,
-                namespace=error.target_namespace
-            )
+            pod = await self.k8s_client.get_pod(name=error.target_workload, namespace=error.target_namespace)
 
             if not pod:
                 return None
@@ -242,55 +249,86 @@ class IstioPolicyWeaver:
             if not pod_labels:
                 return None
 
-            # Find labels that have the pod name in the value
-            # This helps us uniquely identify the workload
-            unique_labels = {}
-            pod_base_name = error.target_workload
-
-            # Remove trailing pod ordinal if it's a StatefulSet pod (e.g., "pod-0" -> "pod")
-            if pod_base_name and pod_base_name[-2:].startswith("-") and pod_base_name[-1].isdigit():
-                pod_base_name = pod_base_name.rsplit("-", 1)[0]
-
-            for key, value in pod_labels.items():
-                # Skip Istio-managed labels
-                if key.startswith("istio.io/") or key.startswith("service.istio.io/"):
-                    continue
-
-                # Skip Kubernetes-managed labels (these can be unreliable for policy matching)
-                if key.startswith("statefulset.kubernetes.io/") or \
-                   key.startswith("controller-revision-hash") or \
-                   key.startswith("pod-template-hash") or \
-                   key.startswith("apps.kubernetes.io/pod-index"):
-                    continue
-
-                # Include labels where value matches the workload name
-                if value == pod_base_name or value == error.target_workload:
-                    unique_labels[key] = value
-
-            # If we found unique labels, return them
-            if unique_labels:
-                return unique_labels
-
-            # Otherwise, return common labels (app, version, etc.) if they exist
-            common_label_keys = ["app", "app.kubernetes.io/name", "version"]
-            for key in common_label_keys:
-                if key in pod_labels:
-                    return {key: pod_labels[key]}
-
-            # Last resort: return all non-istio labels (limited to 3 for safety)
-            non_istio_labels = {
-                k: v for k, v in pod_labels.items()
-                if not k.startswith("istio.io/") and not k.startswith("service.istio.io/")
-            }
-            if non_istio_labels:
-                # Return up to 3 labels
-                return dict(list(non_istio_labels.items())[:3])
-
-            return None
+            # Try different strategies to find appropriate labels
+            return (
+                self._extract_unique_labels(pod_labels, error.target_workload)
+                or self._extract_common_labels(pod_labels)
+                or self._extract_fallback_labels(pod_labels)
+            )
 
         except Exception as e:
             print(f"Warning: Could not get labels for pod {error.target_namespace}/{error.target_workload}: {e}")
             return None
+
+    def _extract_unique_labels(self, pod_labels: dict[str, str], workload_name: str) -> dict[str, str] | None:
+        """
+        Extract labels that uniquely identify the workload.
+
+        Returns labels where the value matches the pod/workload name.
+        """
+        pod_base_name = self._get_pod_base_name(workload_name)
+        unique_labels = {}
+
+        for key, value in pod_labels.items():
+            if self._should_skip_label(key):
+                continue
+
+            # Include labels where value matches the workload name
+            if value in (pod_base_name, workload_name):
+                unique_labels[key] = value
+
+        return unique_labels if unique_labels else None
+
+    def _get_pod_base_name(self, workload_name: str) -> str:
+        """
+        Remove trailing pod ordinal if it's a StatefulSet pod.
+
+        Example: "pod-0" -> "pod"
+        """
+        if workload_name and workload_name[-2:].startswith("-") and workload_name[-1].isdigit():
+            return workload_name.rsplit("-", 1)[0]
+        return workload_name
+
+    def _should_skip_label(self, label_key: str) -> bool:
+        """Check if a label should be skipped (Istio or K8s managed labels)."""
+        skip_prefixes = [
+            "istio.io/",
+            "service.istio.io/",
+            "statefulset.kubernetes.io/",
+            "controller-revision-hash",
+            "pod-template-hash",
+            "apps.kubernetes.io/pod-index",
+        ]
+
+        return any(label_key.startswith(prefix) for prefix in skip_prefixes)
+
+    def _extract_common_labels(self, pod_labels: dict[str, str]) -> dict[str, str] | None:
+        """Extract common application labels (app, version, etc.)."""
+        common_label_keys = ["app", "app.kubernetes.io/name", "version"]
+
+        for key in common_label_keys:
+            if key in pod_labels:
+                return {key: pod_labels[key]}
+
+        return None
+
+    def _extract_fallback_labels(self, pod_labels: dict[str, str]) -> dict[str, str] | None:
+        """
+        Extract fallback labels (all non-istio labels, limited to 3).
+
+        This is a last resort when no other labels are found.
+        """
+        non_istio_labels = {
+            k: v
+            for k, v in pod_labels.items()
+            if not k.startswith("istio.io/") and not k.startswith("service.istio.io/")
+        }
+
+        if non_istio_labels:
+            # Return up to 3 labels for safety
+            return dict(list(non_istio_labels.items())[:3])
+
+        return None
 
     def _generate_policy_name(self, error: AccessError, policy_type: str) -> str:
         """

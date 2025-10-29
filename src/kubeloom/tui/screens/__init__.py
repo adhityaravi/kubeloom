@@ -1,5 +1,5 @@
 """TUI screens."""
 
-from .main import MainScreen
+from kubeloom.tui.screens.main import MainScreen
 
 __all__ = ["MainScreen"]

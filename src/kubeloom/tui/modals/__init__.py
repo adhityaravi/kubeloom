@@ -1,7 +1,7 @@
 """TUI modal/detail screens."""
 
-from .policy_detail import PolicyDetailScreen
-from .resource_detail import ResourceDetailScreen
-from .error_detail import ErrorDetailScreen
+from kubeloom.tui.modals.error_detail import ErrorDetailScreen
+from kubeloom.tui.modals.policy_detail import PolicyDetailScreen
+from kubeloom.tui.modals.resource_detail import ResourceDetailScreen
 
-__all__ = ["PolicyDetailScreen", "ResourceDetailScreen", "ErrorDetailScreen"]
+__all__ = ["ErrorDetailScreen", "PolicyDetailScreen", "ResourceDetailScreen"]

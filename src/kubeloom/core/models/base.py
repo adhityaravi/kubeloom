@@ -3,11 +3,11 @@
 from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum
-from typing import Any, Dict, List, Optional, Set
+from typing import Any
 
-from .actions import AllowedRoute, PolicyAction
-from .sources import PolicySource, PolicyTarget
-from .validation import PolicyConflict, PolicyValidation
+from kubeloom.core.models.actions import AllowedRoute, PolicyAction
+from kubeloom.core.models.sources import PolicySource, PolicyTarget
+from kubeloom.core.models.validation import PolicyConflict, PolicyValidation
 
 
 class PolicyType(Enum):
@@ -66,50 +66,50 @@ class Policy:
     mesh_type: ServiceMeshType
 
     # Kubernetes metadata
-    uid: Optional[str] = None
-    resource_version: Optional[str] = None
-    generation: Optional[int] = None
-    created_at: Optional[datetime] = None
-    updated_at: Optional[datetime] = None
-    deletion_timestamp: Optional[datetime] = None
+    uid: str | None = None
+    resource_version: str | None = None
+    generation: int | None = None
+    created_at: datetime | None = None
+    updated_at: datetime | None = None
+    deletion_timestamp: datetime | None = None
 
     # Kubernetes labels and annotations
-    labels: Dict[str, str] = field(default_factory=dict)
-    annotations: Dict[str, str] = field(default_factory=dict)
+    labels: dict[str, str] = field(default_factory=dict)
+    annotations: dict[str, str] = field(default_factory=dict)
 
     # Raw spec for mesh-specific data
-    spec: Dict[str, Any] = field(default_factory=dict)
+    spec: dict[str, Any] = field(default_factory=dict)
 
     # Complete Kubernetes manifest
-    raw_manifest: Optional[Dict[str, Any]] = None
+    raw_manifest: dict[str, Any] | None = None
 
     # Status
     status: PolicyStatus = PolicyStatus.UNKNOWN
-    status_details: Dict[str, Any] = field(default_factory=dict)
+    status_details: dict[str, Any] = field(default_factory=dict)
 
     # Traffic control
-    source: Optional[PolicySource] = None
-    targets: List[PolicyTarget] = field(default_factory=list)
-    action: Optional[PolicyAction] = None
-    allowed_routes: List[AllowedRoute] = field(default_factory=list)
-    denied_routes: List[AllowedRoute] = field(default_factory=list)
+    source: PolicySource | None = None
+    targets: list[PolicyTarget] = field(default_factory=list)
+    action: PolicyAction | None = None
+    allowed_routes: list[AllowedRoute] = field(default_factory=list)
+    denied_routes: list[AllowedRoute] = field(default_factory=list)
 
     # Analysis results
-    affected_workloads: List[str] = field(default_factory=list)
-    affected_services: List[str] = field(default_factory=list)
-    conflicts: List[PolicyConflict] = field(default_factory=list)
-    validation: Optional[PolicyValidation] = None
+    affected_workloads: list[str] = field(default_factory=list)
+    affected_services: list[str] = field(default_factory=list)
+    conflicts: list[PolicyConflict] = field(default_factory=list)
+    validation: PolicyValidation | None = None
 
     # Relationships
-    related_policies: List[str] = field(default_factory=list)  # namespace/name format
-    depends_on: List[str] = field(default_factory=list)
-    referenced_by: List[str] = field(default_factory=list)
+    related_policies: list[str] = field(default_factory=list)  # namespace/name format
+    depends_on: list[str] = field(default_factory=list)
+    referenced_by: list[str] = field(default_factory=list)
 
     # Metrics
-    last_applied_time: Optional[datetime] = None
+    last_applied_time: datetime | None = None
     apply_count: int = 0
     error_count: int = 0
-    last_error_message: Optional[str] = None
+    last_error_message: str | None = None
 
     def __hash__(self) -> int:
         """Make Policy hashable for use in sets."""
@@ -119,21 +119,21 @@ class Policy:
         """Get fully qualified policy name."""
         return f"{self.namespace}/{self.name}"
 
-    def get_allowed_methods(self) -> Set[str]:
+    def get_allowed_methods(self) -> set[str]:
         """Get all allowed HTTP methods from all routes."""
-        methods = set()
+        methods: set[str] = set()
         for route in self.allowed_routes:
             methods.update(m.value for m in route.methods)
         return methods
 
-    def get_allowed_paths(self) -> Set[str]:
+    def get_allowed_paths(self) -> set[str]:
         """Get all allowed paths from all routes."""
         paths = set()
         for route in self.allowed_routes:
             paths.update(route.paths)
         return paths
 
-    def get_allowed_ports(self) -> Set[int]:
+    def get_allowed_ports(self) -> set[int]:
         """Get all allowed ports from all routes."""
         ports = set()
         for route in self.allowed_routes:
@@ -145,27 +145,21 @@ class Policy:
         if not self.targets:
             return True  # No targets means it applies to all
 
-        for target in self.targets:
-            if target.matches_namespace(namespace):
-                return True
-        return False
+        return any(target.matches_namespace(namespace) for target in self.targets)
 
     def applies_to_service(self, service: str, namespace: str) -> bool:
         """Check if this policy applies to a given service."""
         if not self.targets:
             return True
 
-        for target in self.targets:
-            if target.matches_service(service, namespace):
-                return True
-        return False
+        return any(target.matches_service(service, namespace) for target in self.targets)
 
     def is_permissive(self) -> bool:
         """Check if policy is overly permissive."""
         # No source restrictions and allows all routes
         no_source = not self.source or self.source.is_empty()
         no_target = not self.targets or all(t.is_empty() for t in self.targets)
-        all_routes = not self.allowed_routes or any(r.matches_all() for r in self.allowed_routes)
+        all_routes = not self.allowed_routes or any(r.allow_all for r in self.allowed_routes)
 
         return no_source and no_target and all_routes
 
@@ -175,7 +169,4 @@ class Policy:
 
     def has_errors(self) -> bool:
         """Check if policy has validation errors."""
-        return (
-            self.status == PolicyStatus.ERROR or
-            (self.validation and self.validation.has_errors())
-        )
+        return bool(self.status == PolicyStatus.ERROR or (self.validation and self.validation.has_errors()))

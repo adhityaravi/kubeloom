@@ -1,24 +1,25 @@
 """Namespace selector widget."""
 
-from typing import List
-from textual.widgets import Static
+from collections.abc import Iterator
+
 from textual.containers import Horizontal
+from textual.widgets import Static
 
 
 class NamespaceSelector(Horizontal):
     """Namespace selector widget."""
 
-    def __init__(self):
+    def __init__(self) -> None:
         super().__init__(id="namespace-selector")
-        self.namespaces: List[str] = []
+        self.namespaces: list[str] = []
         self.current_index = 0
 
-    def compose(self):
+    def compose(self) -> Iterator[Static]:
         yield Static("Namespace:", classes="namespace-label")
         yield Static("", id="current-namespace", classes="namespace-value")
         yield Static("", id="namespace-counter", classes="namespace-counter")
 
-    def set_namespaces(self, namespaces: List[str]) -> None:
+    def set_namespaces(self, namespaces: list[str]) -> None:
         """Set available namespaces."""
         self.namespaces = namespaces
         self.current_index = 0

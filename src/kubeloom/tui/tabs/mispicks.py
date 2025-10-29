@@ -2,24 +2,26 @@
 
 import asyncio
 from collections import deque
-from typing import Optional, Set
+from collections.abc import Callable
+from typing import Any
+
 from textual.widgets import DataTable, Static
 
-from ...core.models.errors import AccessError
-from ...core.interfaces import MeshAdapter
-from ..widgets import NamespaceSelector
+from kubeloom.core.interfaces import MeshAdapter
+from kubeloom.core.models.errors import AccessError
+from kubeloom.tui.widgets import NamespaceSelector
 
 
 class MispicksTab:
     """Mispicks tab logic for tracking access errors from mesh logs."""
 
-    def __init__(self):
+    def __init__(self) -> None:
         self.is_tailing_logs = False
-        self.access_errors: deque = deque(maxlen=1000)  # Max 1000 errors in memory
-        self.access_error_hashes: Set[int] = set()  # For deduplication
-        self.log_tailer_task: Optional[asyncio.Task] = None
+        self.access_errors: deque[AccessError] = deque(maxlen=1000)  # Max 1000 errors in memory
+        self.access_error_hashes: set[int] = set()  # For deduplication
+        self.log_tailer_task: asyncio.Task[None] | None = None
 
-    def init_table(self, table: DataTable) -> None:
+    def init_table(self, table: DataTable[Any]) -> None:
         """Initialize the mispicks table columns."""
         # No width specified - let Textual auto-size based on content
         table.add_column("Time")
@@ -28,7 +30,7 @@ class MispicksTab:
         table.add_column("Target")
         table.add_column("Reason")
 
-    def update_table(self, table: DataTable) -> None:
+    def update_table(self, table: DataTable[Any]) -> None:
         """Update the mispicks table with current errors."""
         table.clear()
 
@@ -74,14 +76,14 @@ class MispicksTab:
                 error.error_type.value,
                 source,
                 target,
-                error.reason[:100] if error.reason else "-"  # Truncate long reasons
+                error.reason[:100] if error.reason else "-",  # Truncate long reasons
             )
 
-    def get_error_at_row(self, row: int) -> Optional[AccessError]:
+    def get_error_at_row(self, row: int) -> AccessError | None:
         """Get the error at the specified row index."""
         if len(self.access_errors) == 0:
             return None
-        sorted_errors = list(reversed(self.access_errors))
+        sorted_errors: list[AccessError] = list(reversed(self.access_errors))
         if row < len(sorted_errors):
             return sorted_errors[row]
         return None
@@ -89,9 +91,9 @@ class MispicksTab:
     def start_tailing(
         self,
         status_widget: Static,
-        mesh_adapter: Optional[MeshAdapter],
-        namespace_selector: Optional[NamespaceSelector],
-        update_callback
+        mesh_adapter: MeshAdapter | None,
+        namespace_selector: NamespaceSelector | None,
+        update_callback: Callable[[], None],
     ) -> None:
         """Start tailing access logs from mesh."""
         if self.is_tailing_logs or not mesh_adapter:
@@ -127,9 +129,9 @@ class MispicksTab:
     async def _tail_logs_worker(
         self,
         mesh_adapter: MeshAdapter,
-        namespace_selector: Optional[NamespaceSelector],
+        namespace_selector: NamespaceSelector | None,
         status_widget: Static,
-        update_callback
+        update_callback: Callable[[], None],
     ) -> None:
         """Background worker that tails logs and updates the error table."""
         try:
@@ -163,5 +165,5 @@ class MispicksTab:
             pass
         except Exception as e:
             # Log error and stop tailing
-            status_widget.update(f"Status: Error - {str(e)}")
+            status_widget.update(f"Status: Error - {e!s}")
             self.is_tailing_logs = False

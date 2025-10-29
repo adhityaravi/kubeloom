@@ -1,8 +1,8 @@
 """TUI tab components."""
 
-from .dashboard import DashboardTab
-from .policies import PoliciesTab
-from .resources import ResourcesTab
-from .mispicks import MispicksTab
+from kubeloom.tui.tabs.dashboard import DashboardTab
+from kubeloom.tui.tabs.mispicks import MispicksTab
+from kubeloom.tui.tabs.policies import PoliciesTab
+from kubeloom.tui.tabs.resources import ResourcesTab
 
-__all__ = ["DashboardTab", "PoliciesTab", "ResourcesTab", "MispicksTab"]
+__all__ = ["DashboardTab", "MispicksTab", "PoliciesTab", "ResourcesTab"]

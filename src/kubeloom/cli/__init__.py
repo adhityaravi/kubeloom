@@ -1,5 +1,5 @@
 """CLI module."""
 
-from .main import cli
+from kubeloom.cli.main import cli
 
 __all__ = ["cli"]

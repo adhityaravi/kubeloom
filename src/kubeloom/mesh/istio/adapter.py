@@ -1,23 +1,30 @@
 """Istio service mesh adapter."""
 
-import asyncio
 import logging
-from typing import List, Optional, AsyncIterator
+from collections.abc import AsyncGenerator
+from typing import Any, ClassVar
 
-from ...core.interfaces import MeshAdapter
-from ...core.models import Policy, ServiceMesh, ServiceMeshType, Namespace, PolicyValidation, PolicyType, AccessError
-from ...k8s.client import K8sClient
-from .detector import IstioDetector
-from .converter import IstioConverter
-from .log_parser import IstioLogParser
-from .tailer import SmartLogTailer
-from .weaver import IstioPolicyWeaver
+from kubeloom.core.interfaces import MeshAdapter
+from kubeloom.core.models import (
+    AccessError,
+    Namespace,
+    Policy,
+    PolicyType,
+    PolicyValidation,
+    ServiceMesh,
+    ServiceMeshType,
+)
+from kubeloom.core.models.validation import ValidationError
+from kubeloom.k8s.client import K8sClient
+from kubeloom.mesh.istio.converter import IstioConverter
+from kubeloom.mesh.istio.detector import IstioDetector
+from kubeloom.mesh.istio.log_parser import IstioLogParser
+from kubeloom.mesh.istio.tailer import SmartLogTailer
+from kubeloom.mesh.istio.weaver import IstioPolicyWeaver
 
 # Set up logging to file
 logging.basicConfig(
-    filename='/tmp/kubeloom-weave.log',
-    level=logging.DEBUG,
-    format='%(asctime)s - %(levelname)s - %(message)s'
+    filename="/tmp/kubeloom-weave.log", level=logging.DEBUG, format="%(asctime)s - %(levelname)s - %(message)s"
 )
 
 
@@ -25,7 +32,7 @@ class IstioAdapter(MeshAdapter):
     """Adapter for Istio service mesh."""
 
     # Istio policy types and their API details
-    POLICY_TYPES = {
+    POLICY_TYPES: ClassVar[dict[PolicyType, dict[str, str]]] = {
         PolicyType.AUTHORIZATION_POLICY: {
             "api_version": "security.istio.io/v1beta1",
             "kind": "AuthorizationPolicy",
@@ -87,20 +94,18 @@ class IstioAdapter(MeshAdapter):
         self.log_parser = IstioLogParser()
         self.weaver = IstioPolicyWeaver(k8s_client)
 
-    async def detect(self) -> Optional[ServiceMesh]:
+    async def detect(self) -> ServiceMesh | None:
         """Detect if Istio is installed in the cluster."""
         return await self.detector.detect()
 
-    async def get_policies(self, namespace: str) -> List[Policy]:
+    async def get_policies(self, namespace: str) -> list[Policy]:
         """Get all Istio policies for a namespace."""
         policies = []
 
         for policy_type, api_info in self.POLICY_TYPES.items():
             try:
                 resources = await self.k8s_client.get_resources(
-                    api_version=api_info["api_version"],
-                    kind=api_info["kind"],
-                    namespace=namespace
+                    api_version=api_info["api_version"], kind=api_info["kind"], namespace=namespace
                 )
 
                 for resource in resources:
@@ -115,7 +120,7 @@ class IstioAdapter(MeshAdapter):
 
         return policies
 
-    async def get_policy(self, name: str, namespace: str, policy_type: str) -> Optional[Policy]:
+    async def get_policy(self, name: str, namespace: str, policy_type: str) -> Policy | None:
         """Get a specific policy by name and type."""
         try:
             # Convert string policy type to enum
@@ -130,9 +135,7 @@ class IstioAdapter(MeshAdapter):
 
             api_info = self.POLICY_TYPES[policy_type_enum]
             resources = await self.k8s_client.get_resources(
-                api_version=api_info["api_version"],
-                kind=api_info["kind"],
-                namespace=namespace
+                api_version=api_info["api_version"], kind=api_info["kind"], namespace=namespace
             )
 
             for resource in resources:
@@ -152,28 +155,28 @@ class IstioAdapter(MeshAdapter):
         # Check if policy has required fields
         if not policy.name:
             validation.is_valid = False
-            validation.errors.append("Policy name is required")
+            validation.errors.append(ValidationError(field="name", message="Policy name is required"))
 
         if not policy.namespace:
             validation.is_valid = False
-            validation.errors.append("Policy namespace is required")
+            validation.errors.append(ValidationError(field="namespace", message="Policy namespace is required"))
 
         return validation
 
     def is_namespace_mesh_enabled(self, namespace: Namespace) -> bool:
         """Check if namespace has Istio mesh enabled (sidecar or ambient mode)."""
         return (
-            namespace.has_label("istio-injection", "enabled") or  # Sidecar mode
-            namespace.has_label("istio.io/rev") or  # Revision-based sidecar mode
-            namespace.has_label("istio.io/dataplane-mode", "ambient") or  # Ambient mode
-            namespace.mesh_injection_enabled
+            namespace.has_label("istio-injection", "enabled")  # Sidecar mode
+            or namespace.has_label("istio.io/rev")  # Revision-based sidecar mode
+            or namespace.has_label("istio.io/dataplane-mode", "ambient")  # Ambient mode
+            or namespace.mesh_injection_enabled
         )
 
-    def get_supported_policy_types(self) -> List[str]:
+    def get_supported_policy_types(self) -> list[str]:
         """Get list of policy types supported by Istio."""
-        return [pt.value for pt in self.POLICY_TYPES.keys()]
+        return [pt.value for pt in self.POLICY_TYPES]
 
-    def _convert_resource_to_policy(self, resource: dict, policy_type: PolicyType) -> Optional[Policy]:
+    def _convert_resource_to_policy(self, resource: dict[str, Any], policy_type: PolicyType) -> Policy | None:
         """Convert a Kubernetes resource to a Policy object."""
         try:
             if policy_type == PolicyType.AUTHORIZATION_POLICY:
@@ -206,7 +209,7 @@ class IstioAdapter(MeshAdapter):
             print(f"Failed to convert {policy_type.value} policy '{metadata.get('name', 'unknown')}': {e}")
             return None
 
-    async def tail_access_logs(self, namespace: Optional[str] = None) -> AsyncIterator[AccessError]:
+    async def tail_access_logs(self, namespace: str | None = None) -> AsyncGenerator[AccessError, None]:
         """
         Tail access logs from Istio Ambient mesh using smart adaptive strategy.
 
@@ -229,7 +232,7 @@ class IstioAdapter(MeshAdapter):
         async for error in tailer.tail_with_adaptive_strategy():
             yield error
 
-    def is_pod_enrolled(self, pod: dict, namespace: Namespace) -> bool:
+    def is_pod_enrolled(self, pod: dict[str, Any], namespace: Namespace) -> bool:
         """
         Check if a pod is enrolled in Istio mesh.
 
@@ -269,11 +272,7 @@ class IstioAdapter(MeshAdapter):
 
         # Check for sidecar injection (Sidecar mode)
         containers = pod.get("spec", {}).get("containers", [])
-        for container in containers:
-            if container.get("name") == "istio-proxy":
-                return True
-
-        return False
+        return any(container.get("name") == "istio-proxy" for container in containers)
 
     async def enroll_pod(self, pod_name: str, namespace: str) -> bool:
         """
@@ -294,9 +293,7 @@ class IstioAdapter(MeshAdapter):
             waypoint_name = await self._get_namespace_waypoint(namespace)
 
             # Build labels patch
-            labels = {
-                "istio.io/dataplane-mode": "ambient"
-            }
+            labels = {"istio.io/dataplane-mode": "ambient"}
 
             # If waypoint exists, add use-waypoint labels
             if waypoint_name:
@@ -304,17 +301,9 @@ class IstioAdapter(MeshAdapter):
                 labels["istio.io/use-waypoint-namespace"] = namespace
 
             # Patch pod to add ambient label (and waypoint if exists)
-            patch = {
-                "metadata": {
-                    "labels": labels
-                }
-            }
+            patch = {"metadata": {"labels": labels}}
 
-            await self.k8s_client.patch_pod(
-                name=pod_name,
-                namespace=namespace,
-                body=patch
-            )
+            await self.k8s_client.patch_pod(name=pod_name, namespace=namespace, body=patch)
 
             return True
 
@@ -346,16 +335,12 @@ class IstioAdapter(MeshAdapter):
                     "labels": {
                         "istio.io/dataplane-mode": None,
                         "istio.io/use-waypoint": None,
-                        "istio.io/use-waypoint-namespace": None
+                        "istio.io/use-waypoint-namespace": None,
                     }
                 }
             }
 
-            await self.k8s_client.patch_pod(
-                name=pod_name,
-                namespace=namespace,
-                body=patch
-            )
+            await self.k8s_client.patch_pod(name=pod_name, namespace=namespace, body=patch)
 
             return True
 
@@ -363,7 +348,7 @@ class IstioAdapter(MeshAdapter):
             print(f"Failed to unenroll pod {namespace}/{pod_name}: {e}")
             return False
 
-    async def _get_namespace_waypoint(self, namespace: str) -> Optional[str]:
+    async def _get_namespace_waypoint(self, namespace: str) -> str | None:
         """
         Check if a waypoint proxy is deployed in the namespace.
 
@@ -375,22 +360,21 @@ class IstioAdapter(MeshAdapter):
         try:
             # Check for Gateway resources with gatewayClassName: istio-waypoint in this namespace
             gateways = await self.k8s_client.get_resources(
-                api_version="gateway.networking.k8s.io/v1",
-                kind="Gateway",
-                namespace=namespace
+                api_version="gateway.networking.k8s.io/v1", kind="Gateway", namespace=namespace
             )
 
             for gateway in gateways:
                 spec = gateway.get("spec", {})
                 if spec.get("gatewayClassName") == "istio-waypoint":
-                    return gateway.get("metadata", {}).get("name")
+                    name = gateway.get("metadata", {}).get("name")
+                    return str(name) if name else None
 
             return None
 
         except Exception:
             return None
 
-    async def weave_policy(self, error: AccessError) -> Optional[Policy]:
+    async def weave_policy(self, error: AccessError) -> Policy | None:
         """
         Auto-generate a minimal policy to resolve an access error.
 
@@ -405,8 +389,12 @@ class IstioAdapter(MeshAdapter):
         """
         try:
             # Generate policy using weaver
-            logging.debug(f"Generating policy for error: {error.source_workload} -> {error.target_service or error.target_workload}")
-            logging.debug(f"Error details - source_namespace: {error.source_namespace}, target_namespace: {error.target_namespace}, target_port: {error.target_port}")
+            logging.debug(
+                f"Generating policy for error: {error.source_workload} -> {error.target_service or error.target_workload}"
+            )
+            logging.debug(
+                f"Error details - source_namespace: {error.source_namespace}, target_namespace: {error.target_namespace}, target_port: {error.target_port}"
+            )
 
             policy = await self.weaver.weave_policy(error)
             logging.debug(f"Generated policy: {policy.name} in namespace {policy.namespace}")
@@ -423,27 +411,24 @@ class IstioAdapter(MeshAdapter):
                 version="v1",
                 namespace=policy.namespace,
                 plural="authorizationpolicies",
-                body=manifest
+                body=manifest,
             )
 
             logging.debug(f"Policy applied successfully, result: {result}")
 
             # Fetch the created policy to get full metadata
-            created_policy = await self.get_policy(
-                policy.name,
-                policy.namespace,
-                PolicyType.AUTHORIZATION_POLICY.value
-            )
+            created_policy = await self.get_policy(policy.name, policy.namespace, PolicyType.AUTHORIZATION_POLICY.value)
 
             return created_policy or policy
 
         except Exception as e:
             import traceback
+
             logging.error(f"Failed to weave policy: {e}")
             logging.error(f"Traceback: {traceback.format_exc()}")
             return None
 
-    async def unweave_policies(self, namespace: Optional[str] = None) -> int:
+    async def unweave_policies(self, namespace: str | None = None) -> int:
         """
         Remove all kubeloom-managed policies.
 
@@ -473,7 +458,7 @@ class IstioAdapter(MeshAdapter):
                         version="v1",
                         namespace=ns,
                         plural="authorizationpolicies",
-                        label_selector=f"{IstioPolicyWeaver.MANAGED_LABEL}={IstioPolicyWeaver.MANAGED_LABEL_VALUE}"
+                        label_selector=f"{IstioPolicyWeaver.MANAGED_LABEL}={IstioPolicyWeaver.MANAGED_LABEL_VALUE}",
                     )
 
                     # Delete each managed policy
@@ -485,7 +470,7 @@ class IstioAdapter(MeshAdapter):
                                 version="v1",
                                 namespace=ns,
                                 plural="authorizationpolicies",
-                                name=policy_name
+                                name=policy_name,
                             )
                             removed_count += 1
 
@@ -499,7 +484,7 @@ class IstioAdapter(MeshAdapter):
             print(f"Failed to unweave policies: {e}")
             return 0
 
-    async def get_woven_policies(self, namespace: str) -> List[Policy]:
+    async def get_woven_policies(self, namespace: str) -> list[Policy]:
         """
         Get all kubeloom-managed (woven) policies in a namespace.
 
@@ -516,7 +501,7 @@ class IstioAdapter(MeshAdapter):
                 version="v1",
                 namespace=namespace,
                 plural="authorizationpolicies",
-                label_selector=f"{IstioPolicyWeaver.MANAGED_LABEL}={IstioPolicyWeaver.MANAGED_LABEL_VALUE}"
+                label_selector=f"{IstioPolicyWeaver.MANAGED_LABEL}={IstioPolicyWeaver.MANAGED_LABEL_VALUE}",
             )
 
             # Convert to Policy objects

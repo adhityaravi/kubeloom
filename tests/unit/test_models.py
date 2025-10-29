@@ -1,9 +1,6 @@
 """Unit tests for core models."""
 
-import pytest
-from datetime import datetime
-
-from kubeloom.core.models import Policy, PolicyType, ServiceMeshType, PolicyStatus
+from kubeloom.core.models import Policy, PolicyStatus, PolicyType, ServiceMeshType
 
 
 class TestPolicy:
@@ -15,7 +12,7 @@ class TestPolicy:
             name="test-policy",
             namespace="default",
             type=PolicyType.AUTHORIZATION_POLICY,
-            mesh_type=ServiceMeshType.ISTIO
+            mesh_type=ServiceMeshType.ISTIO,
         )
 
         assert policy.name == "test-policy"
@@ -30,7 +27,7 @@ class TestPolicy:
             name="test-policy",
             namespace="default",
             type=PolicyType.AUTHORIZATION_POLICY,
-            mesh_type=ServiceMeshType.ISTIO
+            mesh_type=ServiceMeshType.ISTIO,
         )
 
         assert policy.get_full_name() == "default/test-policy"
@@ -41,14 +38,14 @@ class TestPolicy:
             name="test-policy",
             namespace="default",
             type=PolicyType.AUTHORIZATION_POLICY,
-            mesh_type=ServiceMeshType.ISTIO
+            mesh_type=ServiceMeshType.ISTIO,
         )
 
         policy2 = Policy(
             name="test-policy",
             namespace="default",
             type=PolicyType.AUTHORIZATION_POLICY,
-            mesh_type=ServiceMeshType.ISTIO
+            mesh_type=ServiceMeshType.ISTIO,
         )
 
         assert hash(policy1) == hash(policy2)
@@ -60,7 +57,7 @@ class TestPolicy:
             name="test-policy",
             namespace="default",
             type=PolicyType.AUTHORIZATION_POLICY,
-            mesh_type=ServiceMeshType.ISTIO
+            mesh_type=ServiceMeshType.ISTIO,
         )
 
         # No targets means applies to all

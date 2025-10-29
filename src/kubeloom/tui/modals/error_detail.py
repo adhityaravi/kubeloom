@@ -1,21 +1,23 @@
 """Access error detail screen."""
 
-from textual import work
-from textual.app import ComposeResult
-from textual.containers import VerticalScroll
-from textual.widgets import Header, Footer, Static, LoadingIndicator
-from textual.screen import Screen
-from textual.binding import Binding
+from typing import ClassVar
+
 from rich.panel import Panel
 from rich.text import Text
+from textual import work
+from textual.app import ComposeResult
+from textual.binding import Binding
+from textual.containers import VerticalScroll
+from textual.screen import Screen
+from textual.widgets import Footer, Header, LoadingIndicator, Static
 
-from ...core.models.errors import AccessError
+from kubeloom.core.models.errors import AccessError
 
 
-class ErrorDetailScreen(Screen):
+class ErrorDetailScreen(Screen[None]):
     """Screen for showing access error details."""
 
-    BINDINGS = [
+    BINDINGS: ClassVar[list[Binding | tuple[str, str] | tuple[str, str, str]]] = [
         Binding("escape", "app.pop_screen", "Back"),
     ]
 
@@ -73,13 +75,24 @@ class ErrorDetailScreen(Screen):
         # Source Information
         content_parts.append("\n[bold cyan]Source Information:[/bold cyan]")
         if self.error.source_workload or self.error.source_namespace:
-            source = f"{self.error.source_namespace}/{self.error.source_workload}" if self.error.source_namespace and self.error.source_workload else (self.error.source_workload or self.error.source_namespace)
+            source = (
+                f"{self.error.source_namespace}/{self.error.source_workload}"
+                if self.error.source_namespace and self.error.source_workload
+                else (self.error.source_workload or self.error.source_namespace)
+            )
             content_parts.append(f"  Workload: {source}")
         if self.error.source_service_account:
             content_parts.append(f"  Service Account: {self.error.source_service_account}")
         if self.error.source_ip:
             content_parts.append(f"  IP Address: {self.error.source_ip}")
-        if not any([self.error.source_workload, self.error.source_namespace, self.error.source_service_account, self.error.source_ip]):
+        if not any(
+            [
+                self.error.source_workload,
+                self.error.source_namespace,
+                self.error.source_service_account,
+                self.error.source_ip,
+            ]
+        ):
             content_parts.append("  [dim]No source information available[/dim]")
 
         # Target Information
@@ -90,19 +103,33 @@ class ErrorDetailScreen(Screen):
                 target = f"{target}:{self.error.target_port}"
             content_parts.append(f"  Service: {target}")
         if self.error.target_workload or self.error.target_namespace:
-            target = f"{self.error.target_namespace}/{self.error.target_workload}" if self.error.target_namespace and self.error.target_workload else (self.error.target_workload or self.error.target_namespace)
+            target_str = (
+                f"{self.error.target_namespace}/{self.error.target_workload}"
+                if self.error.target_namespace and self.error.target_workload
+                else (self.error.target_workload or self.error.target_namespace or "")
+            )
             if self.error.target_port and not self.error.target_service:
-                target = f"{target}:{self.error.target_port}"
-            content_parts.append(f"  Workload: {target}")
+                target_str = f"{target_str}:{self.error.target_port}"
+            content_parts.append(f"  Workload: {target_str}")
         if self.error.target_ip:
             target_ip = self.error.target_ip
             if self.error.target_port and not self.error.target_service and not self.error.target_workload:
                 target_ip = f"{target_ip}:{self.error.target_port}"
             content_parts.append(f"  IP Address: {target_ip}")
         # Show port separately if not already included above
-        if self.error.target_port and not any([self.error.target_service, self.error.target_workload, self.error.target_ip]):
+        if self.error.target_port and not any(
+            [self.error.target_service, self.error.target_workload, self.error.target_ip]
+        ):
             content_parts.append(f"  Port: {self.error.target_port}")
-        if not any([self.error.target_service, self.error.target_workload, self.error.target_namespace, self.error.target_ip, self.error.target_port]):
+        if not any(
+            [
+                self.error.target_service,
+                self.error.target_workload,
+                self.error.target_namespace,
+                self.error.target_ip,
+                self.error.target_port,
+            ]
+        ):
             content_parts.append("  [dim]No target information available[/dim]")
 
         # Request Details (L7)
@@ -129,7 +156,11 @@ class ErrorDetailScreen(Screen):
         if self.error.pod_name or self.error.pod_namespace:
             content_parts.append("\n[bold cyan]Log Source:[/bold cyan]")
             if self.error.pod_name:
-                pod_display = f"{self.error.pod_namespace}/{self.error.pod_name}" if self.error.pod_namespace else self.error.pod_name
+                pod_display = (
+                    f"{self.error.pod_namespace}/{self.error.pod_name}"
+                    if self.error.pod_namespace
+                    else self.error.pod_name
+                )
                 content_parts.append(f"  Pod: {pod_display}")
 
         # Raw Message (if available and different from reason)
@@ -154,7 +185,7 @@ class ErrorDetailScreen(Screen):
 
         words = text.split()
         lines = []
-        current_line = []
+        current_line: list[str] = []
         current_length = 0
 
         for word in words:

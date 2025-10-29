@@ -1,10 +1,11 @@
 """Main TUI application."""
 
 from textual.app import App
-from .screens import MainScreen
+
+from kubeloom.tui.screens import MainScreen
 
 
-class KubeloomApp(App):
+class KubeloomApp(App[None]):
     """kubeloom TUI application."""
 
     CSS = """

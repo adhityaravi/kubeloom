@@ -1,16 +1,18 @@
 """Status bar widget."""
 
-from textual.widgets import Static
+from collections.abc import Iterator
+
 from textual.containers import Horizontal
+from textual.widgets import Static
 
 
 class StatusBar(Horizontal):
     """Bottom status bar with key bindings and info."""
 
-    def __init__(self):
+    def __init__(self) -> None:
         super().__init__(id="status-bar")
 
-    def compose(self):
+    def compose(self) -> Iterator[Static]:
         yield Static("q:quit", classes="key-binding")
         yield Static("j/k:up/down", classes="key-binding")
         yield Static("n/p:next/prev ns", classes="key-binding")

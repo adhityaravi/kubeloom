@@ -1,18 +1,27 @@
 """Istio policy converter."""
 
+import contextlib
 from datetime import datetime
-from typing import Any, Dict, List, Optional
+from typing import Any
 
-from ...core.models import (
-    Policy, PolicyType, ServiceMeshType, PolicyStatus,
-    PolicySource, PolicyTarget, AllowedRoute, HTTPMethod, PolicyAction, ActionType
+from kubeloom.core.models import (
+    ActionType,
+    AllowedRoute,
+    HTTPMethod,
+    Policy,
+    PolicyAction,
+    PolicySource,
+    PolicyStatus,
+    PolicyTarget,
+    PolicyType,
+    ServiceMeshType,
 )
 
 
 class IstioConverter:
     """Convert Istio CRD objects to kubeloom Policy objects."""
 
-    def convert_authorization_policy(self, k8s_object: Dict[str, Any]) -> Policy:
+    def convert_authorization_policy(self, k8s_object: dict[str, Any]) -> Policy:
         """Convert Istio AuthorizationPolicy to Policy."""
         metadata = k8s_object.get("metadata", {})
         spec = k8s_object.get("spec", {})
@@ -49,7 +58,7 @@ class IstioConverter:
                     policy.targets = targetref_targets
 
         # Parse rules
-        if "rules" in spec and spec["rules"]:
+        if spec.get("rules"):
             policy.source, policy.allowed_routes = self._parse_authorization_rules(spec["rules"])
         else:
             # No rules means "allow nothing" for ALLOW policies, "deny nothing" for DENY policies
@@ -77,7 +86,7 @@ class IstioConverter:
 
         return policy
 
-    def convert_peer_authentication(self, k8s_object: Dict[str, Any]) -> Policy:
+    def convert_peer_authentication(self, k8s_object: dict[str, Any]) -> Policy:
         """Convert Istio PeerAuthentication to Policy."""
         metadata = k8s_object.get("metadata", {})
         spec = k8s_object.get("spec", {})
@@ -109,7 +118,7 @@ class IstioConverter:
 
         return policy
 
-    def convert_virtual_service(self, k8s_object: Dict[str, Any]) -> Policy:
+    def convert_virtual_service(self, k8s_object: dict[str, Any]) -> Policy:
         """Convert Istio VirtualService to Policy."""
         metadata = k8s_object.get("metadata", {})
         spec = k8s_object.get("spec", {})
@@ -143,7 +152,7 @@ class IstioConverter:
 
         return policy
 
-    def convert_destination_rule(self, k8s_object: Dict[str, Any]) -> Policy:
+    def convert_destination_rule(self, k8s_object: dict[str, Any]) -> Policy:
         """Convert Istio DestinationRule to Policy."""
         metadata = k8s_object.get("metadata", {})
         spec = k8s_object.get("spec", {})
@@ -173,7 +182,7 @@ class IstioConverter:
 
         return policy
 
-    def convert_gateway(self, k8s_object: Dict[str, Any]) -> Policy:
+    def convert_gateway(self, k8s_object: dict[str, Any]) -> Policy:
         """Convert Istio Gateway to Policy."""
         metadata = k8s_object.get("metadata", {})
         spec = k8s_object.get("spec", {})
@@ -212,7 +221,7 @@ class IstioConverter:
 
         return policy
 
-    def _parse_timestamp(self, timestamp_str: Optional[str]) -> Optional[datetime]:
+    def _parse_timestamp(self, timestamp_str: str | None) -> datetime | None:
         """Parse Kubernetes timestamp."""
         if not timestamp_str:
             return None
@@ -221,13 +230,13 @@ class IstioConverter:
         except Exception:
             return None
 
-    def _parse_selector(self, selector: Dict[str, Any]) -> Optional[PolicyTarget]:
+    def _parse_selector(self, selector: dict[str, Any]) -> PolicyTarget | None:
         """Parse Istio selector to PolicyTarget."""
         if "matchLabels" in selector:
             return PolicyTarget(workload_labels=selector["matchLabels"])
         return None
 
-    def _parse_authorization_rules(self, rules: List[Dict[str, Any]]) -> tuple[Optional[PolicySource], List[AllowedRoute]]:
+    def _parse_authorization_rules(self, rules: list[dict[str, Any]]) -> tuple[PolicySource | None, list[AllowedRoute]]:
         """Parse authorization policy rules."""
         source = None
         routes = []
@@ -254,7 +263,7 @@ class IstioConverter:
 
         return source, routes
 
-    def _parse_authorization_from(self, from_list: List[Dict[str, Any]]) -> Optional[PolicySource]:
+    def _parse_authorization_from(self, from_list: list[dict[str, Any]]) -> PolicySource | None:
         """Parse authorization 'from' clause."""
         source = PolicySource()
 
@@ -286,7 +295,7 @@ class IstioConverter:
 
         return source if not source.is_empty() else None
 
-    def _parse_authorization_to(self, to_list: List[Dict[str, Any]]) -> Optional[AllowedRoute]:
+    def _parse_authorization_to(self, to_list: list[dict[str, Any]]) -> AllowedRoute | None:
         """Parse authorization 'to' clause."""
         # Empty 'to' list means no operations specified = allow all operations
         if not to_list:
@@ -302,33 +311,31 @@ class IstioConverter:
         has_empty_operation = False
 
         for to_item in to_list:
-            if "operation" in to_item:
-                op = to_item["operation"]
-                if not op:  # Empty operation object
-                    has_empty_operation = True
-                    continue
+            if "operation" not in to_item:
+                continue
 
-                if "methods" in op:
-                    methods_list = op["methods"]
-                    if not methods_list:  # Empty methods list means no methods allowed
-                        return AllowedRoute(deny_all=True)
-                    for method in methods_list:
-                        try:
-                            methods.add(HTTPMethod(method))
-                        except ValueError:
-                            pass  # Skip unknown methods
+            op = to_item["operation"]
+            if not op:  # Empty operation object
+                has_empty_operation = True
+                continue
 
-                if "paths" in op:
-                    paths_list = op["paths"]
-                    if not paths_list:  # Empty paths list means no paths allowed
-                        return AllowedRoute(deny_all=True)
-                    paths.extend(paths_list)
+            # Parse methods
+            methods_result = self._parse_operation_methods(op)
+            if methods_result is None:  # Empty methods list means deny all
+                return AllowedRoute(deny_all=True)
+            methods.update(methods_result)
 
-                if "ports" in op:
-                    ports_list = op["ports"]
-                    if not ports_list:  # Empty ports list means no ports allowed
-                        return AllowedRoute(deny_all=True)
-                    ports.extend([int(p) for p in ports_list if str(p).isdigit()])
+            # Parse paths
+            paths_result = self._parse_operation_paths(op)
+            if paths_result is None:  # Empty paths list means deny all
+                return AllowedRoute(deny_all=True)
+            paths.extend(paths_result)
+
+            # Parse ports
+            ports_result = self._parse_operation_ports(op)
+            if ports_result is None:  # Empty ports list means deny all
+                return AllowedRoute(deny_all=True)
+            ports.extend(ports_result)
 
         # If we had an empty operation, allow all
         if has_empty_operation:
@@ -338,11 +345,62 @@ class IstioConverter:
         if methods or paths or ports:
             return AllowedRoute(methods=methods, paths=paths, ports=ports)
 
-        # If we had operations but they were all empty lists, deny all was already returned above
         # If we reach here, allow all
         return AllowedRoute(allow_all=True)
 
-    def _parse_http_routes(self, http_routes: List[Dict[str, Any]]) -> List[AllowedRoute]:
+    def _parse_operation_methods(self, operation: dict[str, Any]) -> set[HTTPMethod] | None:
+        """
+        Parse HTTP methods from operation.
+
+        Returns:
+            Set of HTTPMethod objects, empty set if no methods, None if empty list (deny all)
+        """
+        if "methods" not in operation:
+            return set()
+
+        methods_list = operation["methods"]
+        if not methods_list:  # Empty methods list means no methods allowed
+            return None
+
+        methods = set()
+        for method in methods_list:
+            with contextlib.suppress(ValueError):
+                methods.add(HTTPMethod(method))
+        return methods
+
+    def _parse_operation_paths(self, operation: dict[str, Any]) -> list[str] | None:
+        """
+        Parse paths from operation.
+
+        Returns:
+            List of paths, empty list if no paths, None if empty list (deny all)
+        """
+        if "paths" not in operation:
+            return []
+
+        paths_list = operation["paths"]
+        if not paths_list:  # Empty paths list means no paths allowed
+            return None
+
+        return list(paths_list)
+
+    def _parse_operation_ports(self, operation: dict[str, Any]) -> list[int] | None:
+        """
+        Parse ports from operation.
+
+        Returns:
+            List of ports, empty list if no ports, None if empty list (deny all)
+        """
+        if "ports" not in operation:
+            return []
+
+        ports_list = operation["ports"]
+        if not ports_list:  # Empty ports list means no ports allowed
+            return None
+
+        return [int(p) for p in ports_list if str(p).isdigit()]
+
+    def _parse_http_routes(self, http_routes: list[dict[str, Any]]) -> list[AllowedRoute]:
         """Parse VirtualService HTTP routes."""
         routes = []
 
@@ -363,10 +421,8 @@ class IstioConverter:
                     if "method" in match:
                         method_match = match["method"]
                         if "exact" in method_match:
-                            try:
+                            with contextlib.suppress(ValueError):
                                 allowed_route.methods = {HTTPMethod(method_match["exact"])}
-                            except ValueError:
-                                pass
 
                     if "headers" in match:
                         allowed_route.headers = {}
@@ -378,7 +434,7 @@ class IstioConverter:
 
         return routes
 
-    def _parse_target_refs(self, target_refs: List[Dict[str, Any]]) -> List[PolicyTarget]:
+    def _parse_target_refs(self, target_refs: list[dict[str, Any]]) -> list[PolicyTarget]:
         """Parse Istio targetRefs to PolicyTarget objects."""
         targets = []
 
@@ -400,7 +456,7 @@ class IstioConverter:
 
         return targets
 
-    def export_authorization_policy(self, policy: Policy) -> Dict[str, Any]:
+    def export_authorization_policy(self, policy: Policy) -> dict[str, Any]:
         """
         Export a Policy object to an Istio AuthorizationPolicy manifest.
 
@@ -423,94 +479,116 @@ class IstioConverter:
                 "labels": dict(policy.labels) if policy.labels else {},
                 "annotations": dict(policy.annotations) if policy.annotations else {},
             },
-            "spec": {}
+            "spec": {},
         }
 
         # Add action
-        if policy.action:
-            if policy.action.type == ActionType.DENY:
-                manifest["spec"]["action"] = "DENY"
-            elif policy.action.type == ActionType.AUDIT:
-                manifest["spec"]["action"] = "AUDIT"
-            else:
-                manifest["spec"]["action"] = "ALLOW"
+        self._add_action_to_manifest(manifest, policy)
 
         # Determine if this is L4 or L7 based on labels
         is_l7 = policy.labels.get("kubeloom.io/policy-type") == "l7"
 
         # Add target - use targetRefs for L7, selector for L4
-        if policy.targets:
-            if is_l7:
-                # L7: Use targetRefs to target service
-                target_refs = []
-                for target in policy.targets:
-                    if target.services:
-                        for service in target.services:
-                            target_refs.append({
-                                "kind": "Service",
-                                "group": "",
-                                "name": service
-                            })
-                if target_refs:
-                    manifest["spec"]["targetRefs"] = target_refs
-            else:
-                # L4: Use selector with matchLabels
-                if policy.targets[0].workload_labels:
-                    manifest["spec"]["selector"] = {
-                        "matchLabels": dict(policy.targets[0].workload_labels)
-                    }
+        self._add_targets_to_manifest(manifest, policy, is_l7)
 
         # Add rules
-        rules = []
+        self._add_rules_to_manifest(manifest, policy, is_l7)
+
+        return manifest
+
+    def _add_action_to_manifest(self, manifest: dict[str, Any], policy: Policy) -> None:
+        """Add action field to the manifest spec."""
+        if not policy.action:
+            return
+
+        if policy.action.type == ActionType.DENY:
+            manifest["spec"]["action"] = "DENY"
+        elif policy.action.type == ActionType.AUDIT:
+            manifest["spec"]["action"] = "AUDIT"
+        else:
+            manifest["spec"]["action"] = "ALLOW"
+
+    def _add_targets_to_manifest(self, manifest: dict[str, Any], policy: Policy, is_l7: bool) -> None:
+        """Add target (selector or targetRefs) to the manifest spec."""
+        if not policy.targets:
+            return
+
+        if is_l7:
+            # L7: Use targetRefs to target service
+            target_refs = self._build_target_refs(policy.targets)
+            if target_refs:
+                manifest["spec"]["targetRefs"] = target_refs
+        else:
+            # L4: Use selector with matchLabels
+            if policy.targets[0].workload_labels:
+                manifest["spec"]["selector"] = {"matchLabels": dict(policy.targets[0].workload_labels)}
+
+    def _build_target_refs(self, targets: list[PolicyTarget]) -> list[dict[str, Any]]:
+        """Build targetRefs array from policy targets."""
+        target_refs = []
+        for target in targets:
+            if target.services:
+                for service in target.services:
+                    target_refs.append({"kind": "Service", "group": "", "name": service})
+        return target_refs
+
+    def _add_rules_to_manifest(self, manifest: dict[str, Any], policy: Policy, is_l7: bool) -> None:
+        """Add rules to the manifest spec."""
         rule = {}
 
         # Add 'from' section if source exists
         if policy.source and not policy.source.is_empty():
-            from_items = []
-            source_item = {"source": {}}
-
-            if policy.source.principals:
-                source_item["source"]["principals"] = list(policy.source.principals)
-            if policy.source.namespaces:
-                source_item["source"]["namespaces"] = list(policy.source.namespaces)
-            if policy.source.ip_blocks:
-                source_item["source"]["ipBlocks"] = list(policy.source.ip_blocks)
-
-            from_items.append(source_item)
-            rule["from"] = from_items
+            rule["from"] = self._build_from_clause(policy.source)
 
         # Add 'to' section from allowed_routes
         if policy.allowed_routes:
-            to_items = []
-            has_any_constraints = False
-
-            for route in policy.allowed_routes:
-                operation = {}
-
-                # Only add HTTP methods/paths for L7 policies
-                if is_l7:
-                    if route.methods:
-                        operation["methods"] = [m.value for m in route.methods]
-                        has_any_constraints = True
-                    if route.paths:
-                        operation["paths"] = list(route.paths)
-                        has_any_constraints = True
-
-                # Ports can be used in both L4 and L7
-                if route.ports:
-                    operation["ports"] = [str(p) for p in route.ports]
-                    has_any_constraints = True
-
-                to_items.append({"operation": operation})
-
-            # Only add 'to' clause if there are actual constraints
-            # Empty operation {} should omit the 'to' clause entirely (allow all operations)
-            if has_any_constraints:
-                rule["to"] = to_items
-            # If no constraints, omit 'to' clause entirely (allow all operations)
+            to_clause = self._build_to_clause(policy.allowed_routes, is_l7)
+            if to_clause is not None:
+                rule["to"] = to_clause
 
         if rule:
-            rules.append(rule)
-            manifest["spec"]["rules"] = rules
+            manifest["spec"]["rules"] = [rule]
 
-        return manifest
+    def _build_from_clause(self, source: PolicySource) -> list[dict[str, Any]]:
+        """Build 'from' clause from policy source."""
+        source_item: dict[str, Any] = {"source": {}}
+
+        if source.principals:
+            source_item["source"]["principals"] = list(source.principals)
+        if source.namespaces:
+            source_item["source"]["namespaces"] = list(source.namespaces)
+        if source.ip_blocks:
+            source_item["source"]["ipBlocks"] = list(source.ip_blocks)
+
+        return [source_item]
+
+    def _build_to_clause(self, allowed_routes: list[AllowedRoute], is_l7: bool) -> list[dict[str, Any]] | None:
+        """Build 'to' clause from allowed routes."""
+        to_items = []
+        has_any_constraints = False
+
+        for route in allowed_routes:
+            operation = {}
+
+            # Only add HTTP methods/paths for L7 policies
+            if is_l7:
+                if route.methods:
+                    operation["methods"] = [m.value for m in route.methods]
+                    has_any_constraints = True
+                if route.paths:
+                    operation["paths"] = list(route.paths)
+                    has_any_constraints = True
+
+            # Ports can be used in both L4 and L7
+            if route.ports:
+                operation["ports"] = [str(p) for p in route.ports]
+                has_any_constraints = True
+
+            to_items.append({"operation": operation})
+
+        # Only add 'to' clause if there are actual constraints
+        # Empty operation {} should omit the 'to' clause entirely (allow all operations)
+        if has_any_constraints:
+            return to_items
+
+        return None

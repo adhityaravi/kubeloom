@@ -2,7 +2,6 @@
 
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import List, Optional
 
 
 class ConflictSeverity(Enum):
@@ -24,12 +23,12 @@ class PolicyConflict:
     description: str
 
     # Specific conflict details
-    conflicting_rules: List[str] = field(default_factory=list)
-    affected_resources: List[str] = field(default_factory=list)
+    conflicting_rules: list[str] = field(default_factory=list)
+    affected_resources: list[str] = field(default_factory=list)
 
     # Resolution guidance
-    resolution_hint: Optional[str] = None
-    recommended_action: Optional[str] = None  # MERGE, DELETE, MODIFY_PRIORITY
+    resolution_hint: str | None = None
+    recommended_action: str | None = None  # MERGE, DELETE, MODIFY_PRIORITY
 
     def is_blocking(self) -> bool:
         """Check if this conflict blocks policy application."""
@@ -42,7 +41,7 @@ class ValidationError:
 
     field: str  # Field path that has the error
     message: str
-    suggestion: Optional[str] = None
+    suggestion: str | None = None
 
     def __str__(self) -> str:
         base = f"{self.field}: {self.message}"
@@ -54,18 +53,18 @@ class PolicyValidation:
     """Complete validation result for a policy."""
 
     is_valid: bool
-    errors: List[ValidationError] = field(default_factory=list)
-    warnings: List[ValidationError] = field(default_factory=list)
+    errors: list[ValidationError] = field(default_factory=list)
+    warnings: list[ValidationError] = field(default_factory=list)
 
     # Best practice suggestions
-    suggestions: List[str] = field(default_factory=list)
+    suggestions: list[str] = field(default_factory=list)
 
     # Security findings
-    security_issues: List[str] = field(default_factory=list)
-    overly_permissive_rules: List[str] = field(default_factory=list)
+    security_issues: list[str] = field(default_factory=list)
+    overly_permissive_rules: list[str] = field(default_factory=list)
 
     # Performance implications
-    performance_warnings: List[str] = field(default_factory=list)
+    performance_warnings: list[str] = field(default_factory=list)
 
     def has_errors(self) -> bool:
         """Check if validation has any errors."""
@@ -75,9 +74,9 @@ class PolicyValidation:
         """Check if validation found security issues."""
         return bool(self.security_issues or self.overly_permissive_rules)
 
-    def get_all_issues(self) -> List[str]:
+    def get_all_issues(self) -> list[str]:
         """Get all issues as a flat list of strings."""
-        issues = []
+        issues: list[str] = []
         issues.extend(str(e) for e in self.errors)
         issues.extend(str(w) for w in self.warnings)
         issues.extend(self.security_issues)

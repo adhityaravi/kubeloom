@@ -1,22 +1,18 @@
 """CLI command implementations."""
 
-import asyncio
-from typing import Optional, List
 import json
 
 from rich.console import Console
 from rich.table import Table
 
-from ..core.models import Policy
-from ..core.interfaces import MeshAdapter
-from ..k8s.client import K8sClient
-from ..mesh.istio.adapter import IstioAdapter
-
+from kubeloom.core.models import Policy
+from kubeloom.k8s.client import K8sClient
+from kubeloom.mesh.istio.adapter import IstioAdapter
 
 console = Console()
 
 
-async def list_policies_async(namespace: Optional[str], output: str, mesh_type: Optional[str]) -> None:
+async def list_policies_async(namespace: str | None, output: str, mesh_type: str | None) -> None:
     """List all service mesh policies in the cluster."""
     try:
         k8s_client = K8sClient()
@@ -28,7 +24,7 @@ async def list_policies_async(namespace: Optional[str], output: str, mesh_type: 
             console.print("No supported service mesh detected")
             return
 
-        policies: List[Policy] = []
+        policies: list[Policy] = []
 
         if namespace:
             policies = await adapter.get_policies(namespace)
@@ -49,7 +45,7 @@ async def list_policies_async(namespace: Optional[str], output: str, mesh_type: 
         console.print(f"Error: {e}")
 
 
-async def describe_policy_async(namespace: Optional[str], policy_name: str) -> None:
+async def describe_policy_async(namespace: str | None, policy_name: str) -> None:
     """Describe a specific policy in detail."""
     try:
         k8s_client = K8sClient()
@@ -68,7 +64,7 @@ async def describe_policy_async(namespace: Optional[str], policy_name: str) -> N
         console.print(f"Error: {e}")
 
 
-def _output_table(policies: List[Policy]) -> None:
+def _output_table(policies: list[Policy]) -> None:
     """Output policies as a table."""
     if not policies:
         console.print("No policies found")
@@ -89,25 +85,27 @@ def _output_table(policies: List[Policy]) -> None:
             policy.type.value,
             policy.status.value,
             str(len(policy.targets)),
-            str(len(policy.allowed_routes))
+            str(len(policy.allowed_routes)),
         )
 
     console.print(table)
 
 
-def _output_json(policies: List[Policy]) -> None:
+def _output_json(policies: list[Policy]) -> None:
     """Output policies as JSON."""
     policy_data = []
     for policy in policies:
-        policy_data.append({
-            "name": policy.name,
-            "namespace": policy.namespace,
-            "type": policy.type.value,
-            "status": policy.status.value,
-            "mesh_type": policy.mesh_type.value,
-            "targets": len(policy.targets),
-            "routes": len(policy.allowed_routes),
-            "conflicts": len(policy.conflicts)
-        })
+        policy_data.append(
+            {
+                "name": policy.name,
+                "namespace": policy.namespace,
+                "type": policy.type.value,
+                "status": policy.status.value,
+                "mesh_type": policy.mesh_type.value,
+                "targets": len(policy.targets),
+                "routes": len(policy.allowed_routes),
+                "conflicts": len(policy.conflicts),
+            }
+        )
 
     print(json.dumps(policy_data, indent=2))
