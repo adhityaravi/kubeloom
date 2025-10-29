@@ -1,6 +1,6 @@
 """Policy analyzers."""
 
-from .security import SecurityAnalyzer
-from .conflicts import ConflictAnalyzer
+from kubeloom.analyzers.conflicts import ConflictAnalyzer
+from kubeloom.analyzers.security import SecurityAnalyzer
 
-__all__ = ["SecurityAnalyzer", "ConflictAnalyzer"]
+__all__ = ["ConflictAnalyzer", "SecurityAnalyzer"]

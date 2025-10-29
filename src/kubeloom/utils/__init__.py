@@ -1,6 +1,6 @@
 """Utility functions."""
 
-from .logging import setup_logging
-from .config import load_config
+from kubeloom.utils.config import load_config
+from kubeloom.utils.logging import setup_logging
 
-__all__ = ["setup_logging", "load_config"]
+__all__ = ["load_config", "setup_logging"]

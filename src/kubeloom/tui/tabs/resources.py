@@ -1,12 +1,13 @@
 """Resources tab component."""
 
-from typing import List, Optional
-from textual.widgets import DataTable
-from rich.text import Text
+from typing import Any
 
-from ...core.models import Policy, Namespace
-from ...core.services import ResourceInfo
-from ...core.interfaces import MeshAdapter, ClusterClient
+from rich.text import Text
+from textual.widgets import DataTable
+
+from kubeloom.core.interfaces import ClusterClient, MeshAdapter
+from kubeloom.core.models import Namespace, Policy
+from kubeloom.core.services import ResourceInfo
 
 
 class ResourcesTab:
@@ -14,12 +15,12 @@ class ResourcesTab:
 
     @staticmethod
     async def update_table(
-        table: DataTable,
-        resources: List[ResourceInfo],
-        policies: List[Policy],
-        mesh_adapter: Optional[MeshAdapter] = None,
-        k8s_client: Optional[ClusterClient] = None,
-        current_namespace: Optional[Namespace] = None
+        table: DataTable[Any],
+        resources: list[ResourceInfo],
+        policies: list[Policy],
+        mesh_adapter: MeshAdapter | None = None,
+        k8s_client: ClusterClient | None = None,
+        current_namespace: Namespace | None = None,
     ) -> None:
         """Update the resources table with mesh enrollment status."""
         table.clear(columns=True)
@@ -31,7 +32,7 @@ class ResourcesTab:
         table.add_column("Labels")
 
         # Group resources by type
-        grouped_resources = {}
+        grouped_resources: dict[str, list[ResourceInfo]] = {}
         for resource in resources:
             if resource.type not in grouped_resources:
                 grouped_resources[resource.type] = []
@@ -61,8 +62,7 @@ class ResourcesTab:
             for resource in resources_of_type:
                 # Count policies affecting this resource
                 affecting_policies = sum(
-                    1 for policy in policies
-                    if ResourcesTab._resource_affected_by_policy(resource, policy)
+                    1 for policy in policies if ResourcesTab._resource_affected_by_policy(resource, policy)
                 )
 
                 # Format labels (show first few key=value pairs)
@@ -89,7 +89,7 @@ class ResourcesTab:
                         Text(resource.type, style="red"),
                         Text(resource.service_account or "-", style="red"),
                         Text(str(affecting_policies), style="red"),
-                        Text(labels_str or "-", style="red")
+                        Text(labels_str or "-", style="red"),
                     )
                 else:
                     table.add_row(
@@ -97,7 +97,7 @@ class ResourcesTab:
                         resource.type,
                         resource.service_account or "-",
                         str(affecting_policies),
-                        labels_str or "-"
+                        labels_str or "-",
                     )
 
     @staticmethod
@@ -109,17 +109,16 @@ class ResourcesTab:
                 return True
             if resource.type == "pod" and resource.name in target.pods:
                 return True
-            if target.workload_labels:
-                if all(resource.labels.get(k) == v for k, v in target.workload_labels.items()):
-                    return True
+            if target.workload_labels and all(resource.labels.get(k) == v for k, v in target.workload_labels.items()):
+                return True
 
         # Check if resource is a source
         if policy.source:
-            if (resource.service_account and
-                resource.service_account in policy.source.service_accounts):
+            if resource.service_account and resource.service_account in policy.source.service_accounts:
                 return True
-            if policy.source.workload_labels:
-                if all(resource.labels.get(k) == v for k, v in policy.source.workload_labels.items()):
-                    return True
+            if policy.source.workload_labels and all(
+                resource.labels.get(k) == v for k, v in policy.source.workload_labels.items()
+            ):
+                return True
 
         return False

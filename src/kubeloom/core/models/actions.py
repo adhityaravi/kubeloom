@@ -2,7 +2,7 @@
 
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Dict, List, Literal, Optional, Set
+from typing import Any, Literal
 
 
 class ActionType(Enum):
@@ -44,12 +44,12 @@ class HTTPMethod(Enum):
     ALL = "*"  # Match all methods
 
     @classmethod
-    def read_methods(cls) -> Set["HTTPMethod"]:
+    def read_methods(cls) -> set["HTTPMethod"]:
         """Returns read-only HTTP methods."""
         return {cls.GET, cls.HEAD, cls.OPTIONS}
 
     @classmethod
-    def write_methods(cls) -> Set["HTTPMethod"]:
+    def write_methods(cls) -> set["HTTPMethod"]:
         """Returns methods that modify resources."""
         return {cls.POST, cls.PUT, cls.DELETE, cls.PATCH}
 
@@ -58,31 +58,31 @@ class HTTPMethod(Enum):
 class AllowedRoute:
     """Traffic route specification for policies."""
 
-    methods: Set[HTTPMethod] = field(default_factory=set)
-    paths: List[str] = field(default_factory=list)  # URL paths with wildcards: /api/*, /health
-    ports: List[int] = field(default_factory=list)  # TCP/UDP ports
+    methods: set[HTTPMethod] = field(default_factory=set)
+    paths: list[str] = field(default_factory=list)  # URL paths with wildcards: /api/*, /health
+    ports: list[int] = field(default_factory=list)  # TCP/UDP ports
 
     # Protocol-specific fields
-    hosts: List[str] = field(default_factory=list)  # DNS names: api.example.com, *.internal
-    headers: Dict[str, str] = field(default_factory=dict)  # Required headers
-    query_params: Dict[str, str] = field(default_factory=dict)
-    protocol: Optional[Literal["HTTP", "HTTPS", "GRPC", "HTTP2", "TCP", "UDP", "TLS"]] = None
+    hosts: list[str] = field(default_factory=list)  # DNS names: api.example.com, *.internal
+    headers: dict[str, str] = field(default_factory=dict)  # Required headers
+    query_params: dict[str, str] = field(default_factory=dict)
+    protocol: Literal["HTTP", "HTTPS", "GRPC", "HTTP2", "TCP", "UDP", "TLS"] | None = None
 
     # Special route flags
     allow_all: bool = False
-    allow_nothing: bool = False  # Priority difference between deny all and allow nothing. 
+    allow_nothing: bool = False  # Priority difference between deny all and allow nothing.
     deny_all: bool = False
     deny_nothing: bool = False  # does this exist?
 
-    
+
 @dataclass
 class RateLimitConfig:
     """Rate limiting configuration."""
 
-    requests_per_second: Optional[int] = None
-    burst_size: Optional[int] = None
+    requests_per_second: int | None = None
+    burst_size: int | None = None
     duration_seconds: int = 60
-    by_header: Optional[str] = None  # Rate limit by specific header value
+    by_header: str | None = None  # Rate limit by specific header value
     by_remote_ip: bool = False
     by_path: bool = False
     response_status_code: Literal[429, 503] = 429  # Too Many Requests or Service Unavailable
@@ -94,8 +94,8 @@ class RetryConfig:
 
     attempts: int = 3
     per_try_timeout_seconds: int = 30
-    retry_on: Set[Literal["5xx", "4xx", "reset", "connect-failure", "refused-stream"]] = field(default_factory=set)
-    retry_on_status_codes: Set[int] = field(default_factory=set)
+    retry_on: set[Literal["5xx", "4xx", "reset", "connect-failure", "refused-stream"]] = field(default_factory=set)
+    retry_on_status_codes: set[int] = field(default_factory=set)
     backoff_strategy: Literal["exponential", "linear", "fixed"] = "exponential"
 
 
@@ -123,22 +123,22 @@ class PolicyAction:
     priority: int = 0  # Higher priority actions execute first
 
     # Traffic management configs
-    rate_limit: Optional[RateLimitConfig] = None
-    retry: Optional[RetryConfig] = None
-    fault_injection: Optional[FaultInjectionConfig] = None
+    rate_limit: RateLimitConfig | None = None
+    retry: RetryConfig | None = None
+    fault_injection: FaultInjectionConfig | None = None
 
     # Redirect configuration
-    redirect_host: Optional[str] = None
-    redirect_port: Optional[int] = None
-    redirect_scheme: Optional[Literal["http", "https"]] = None
-    redirect_path: Optional[str] = None
+    redirect_host: str | None = None
+    redirect_port: int | None = None
+    redirect_scheme: Literal["http", "https"] | None = None
+    redirect_path: str | None = None
 
     # Custom action data for extensibility
-    custom_config: Dict[str, any] = field(default_factory=dict)
+    custom_config: dict[str, Any] = field(default_factory=dict)
 
     # Audit/logging configuration
     log_level: Literal["DEBUG", "INFO", "WARN", "ERROR", "NONE"] = "INFO"
-    log_additional_headers: List[str] = field(default_factory=list)
+    log_additional_headers: list[str] = field(default_factory=list)
     log_request_body: bool = False
     log_response_body: bool = False
 

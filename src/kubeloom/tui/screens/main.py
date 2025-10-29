@@ -1,28 +1,28 @@
 """Main screen for kubeloom TUI."""
 
-from typing import List, Optional
 import asyncio
-from textual import work
+from typing import Any, ClassVar
+
 from textual.app import ComposeResult
-from textual.containers import Container, Vertical, Horizontal
-from textual.widgets import Static, DataTable, TabbedContent, TabPane, Tree
-from textual.screen import Screen
 from textual.binding import Binding
+from textual.containers import Container, Horizontal, Vertical
+from textual.screen import Screen
+from textual.widgets import DataTable, Static, TabbedContent, TabPane, Tree
 
-from ...core.models import Policy, ServiceMesh
-from ...core.interfaces import MeshAdapter
-from ...core.services import PolicyAnalyzer, ResourceInfo
-from ...k8s.client import K8sClient
-from ...mesh.istio.adapter import IstioAdapter
-from ..widgets import StatusBar, NamespaceSelector
-from ..modals import PolicyDetailScreen, ResourceDetailScreen, ErrorDetailScreen
-from ..tabs import DashboardTab, PoliciesTab, ResourcesTab, MispicksTab
+from kubeloom.core.interfaces import MeshAdapter
+from kubeloom.core.models import Policy, ServiceMesh
+from kubeloom.core.services import PolicyAnalyzer, ResourceInfo
+from kubeloom.k8s.client import K8sClient
+from kubeloom.mesh.istio.adapter import IstioAdapter
+from kubeloom.tui.modals import ErrorDetailScreen, PolicyDetailScreen, ResourceDetailScreen
+from kubeloom.tui.tabs import DashboardTab, MispicksTab, PoliciesTab, ResourcesTab
+from kubeloom.tui.widgets import NamespaceSelector, StatusBar
 
 
-class MainScreen(Screen):
+class MainScreen(Screen[None]):
     """Main screen for service mesh policy management."""
 
-    BINDINGS = [
+    BINDINGS: ClassVar[list[Binding | tuple[str, str] | tuple[str, str, str]]] = [
         Binding("q", "quit", "Quit"),
         Binding("r", "refresh", "Refresh"),
         Binding("enter", "view_item", "View"),
@@ -47,17 +47,17 @@ class MainScreen(Screen):
         Binding("W", "unweave_policies", "Unweave All", show=False),
     ]
 
-    def __init__(self):
+    def __init__(self) -> None:
         super().__init__()
-        self.k8s_client: Optional[K8sClient] = None
-        self.mesh_adapter: Optional[MeshAdapter] = None
-        self.service_mesh: Optional[ServiceMesh] = None
-        self.namespaces_with_policies: List[str] = []
-        self.namespaces: List = []  # Full namespace objects
-        self.policies: List[Policy] = []
-        self.resources: List[ResourceInfo] = []
-        self.policy_analyzer: Optional[PolicyAnalyzer] = None
-        self.namespace_selector: Optional[NamespaceSelector] = None
+        self.k8s_client: K8sClient | None = None
+        self.mesh_adapter: MeshAdapter | None = None
+        self.service_mesh: ServiceMesh | None = None
+        self.namespaces_with_policies: list[str] = []
+        self.namespaces: list[Any] = []  # Full namespace objects
+        self.policies: list[Policy] = []
+        self.resources: list[ResourceInfo] = []
+        self.policy_analyzer: PolicyAnalyzer | None = None
+        self.namespace_selector: NamespaceSelector | None = None
         self.focused_section = "table"  # "table" or "tree"
 
         # Tab components
@@ -74,28 +74,27 @@ class MainScreen(Screen):
             with TabbedContent(initial="dashboard", id="main-tabs"):
                 with TabPane("Dashboard", id="dashboard"):
                     yield Static("Loading dashboard...", id="dashboard-content")
-                with TabPane("Policies", id="policies"):
+                with TabPane("Policies", id="policies"), Horizontal():
+                    yield DataTable(id="policies-table", zebra_stripes=True)
+                    with Container(id="namespace-panel"):
+                        yield Static("Namespaces", id="namespace-title")
+                        yield Tree("Namespaces", id="namespace-tree")
+
+                with TabPane("Resources", id="resources"), Vertical():
                     with Horizontal():
-                        yield DataTable(id="policies-table", zebra_stripes=True)
+                        yield DataTable(id="resources-table", zebra_stripes=True)
                         with Container(id="namespace-panel"):
                             yield Static("Namespaces", id="namespace-title")
-                            yield Tree("Namespaces", id="namespace-tree")
+                            yield Tree("Namespaces", id="namespace-tree-resources")
+                    yield Static("e: Enroll Pod | u: Unenroll Pod", id="resources-footer")
 
-                with TabPane("Resources", id="resources"):
-                    with Vertical():
-                        with Horizontal():
-                            yield DataTable(id="resources-table", zebra_stripes=True)
-                            with Container(id="namespace-panel"):
-                                yield Static("Namespaces", id="namespace-title")
-                                yield Tree("Namespaces", id="namespace-tree-resources")
-                        yield Static("e: Enroll Pod | u: Unenroll Pod", id="resources-footer")
-
-                with TabPane("Mispicks", id="mispicks"):
-                    with Vertical():
-                        yield DataTable(id="mispicks-table", zebra_stripes=True)
-                        with Horizontal(id="mispicks-footer-container"):
-                            yield Static("s: Start | x: Stop | c: Clear | w: Weave | W: Unweave All", id="mispicks-keybindings")
-                            yield Static("Status: Not running", id="tailing-status")
+                with TabPane("Mispicks", id="mispicks"), Vertical():
+                    yield DataTable(id="mispicks-table", zebra_stripes=True)
+                    with Horizontal(id="mispicks-footer-container"):
+                        yield Static(
+                            "s: Start | x: Stop | c: Clear | w: Weave | W: Unweave All", id="mispicks-keybindings"
+                        )
+                        yield Static("Status: Not running", id="tailing-status")
 
                 with TabPane("Conflicts", id="conflicts"):
                     yield Static("Conflict detection not implemented", id="conflicts-content")
@@ -149,7 +148,7 @@ ACTIONS:
 
         except Exception as e:
             dashboard = self.query_one("#dashboard-content", Static)
-            dashboard.update(f"Error: {str(e)}")
+            dashboard.update(f"Error: {e!s}")
 
     async def _load_namespaces_with_policies(self) -> None:
         """Load namespaces that contain policies."""
@@ -157,6 +156,8 @@ ACTIONS:
             return
 
         try:
+            if self.k8s_client is None:
+                return
             namespaces = await self.k8s_client.get_namespaces()
             self.namespaces = namespaces  # Store full namespace objects
             self.namespaces_with_policies = []
@@ -188,7 +189,7 @@ ACTIONS:
 
         except Exception as e:
             dashboard = self.query_one("#dashboard-content", Static)
-            dashboard.update(f"Error loading policies: {str(e)}")
+            dashboard.update(f"Error loading policies: {e!s}")
 
     def _update_policies_table(self) -> None:
         """Update the policies table."""
@@ -220,12 +221,7 @@ ACTIONS:
             current_namespace = next((ns for ns in self.namespaces if ns.name == current_ns_name), None)
 
         await self.resources_tab.update_table(
-            table,
-            self.resources,
-            self.policies,
-            self.mesh_adapter,
-            self.k8s_client,
-            current_namespace
+            table, self.resources, self.policies, self.mesh_adapter, self.k8s_client, current_namespace
         )
 
     async def _update_namespace_tree(self) -> None:
@@ -253,10 +249,7 @@ ACTIONS:
         """Update dashboard with cluster and mesh statistics."""
         dashboard = self.query_one("#dashboard-content", Static)
         panel = self.dashboard_tab.render(
-            self.service_mesh,
-            self.namespaces_with_policies,
-            self.policies,
-            self.namespace_selector
+            self.service_mesh, self.namespaces_with_policies, self.policies, self.namespace_selector
         )
         dashboard.update(panel)
 
@@ -300,7 +293,7 @@ ACTIONS:
                 if hasattr(policy_name, "plain"):
                     policy_name = policy_name.plain
                 policy = next((p for p in self.policies if p.name == policy_name), None)
-                if policy:
+                if policy and self.k8s_client is not None:
                     self.app.push_screen(PolicyDetailScreen(policy, self.k8s_client))
 
         elif tabs.active == "resources":
@@ -311,8 +304,10 @@ ACTIONS:
                 if hasattr(resource_name, "plain"):
                     resource_name = resource_name.plain
                 resource = next((r for r in self.resources if r.name == resource_name), None)
-                if resource and self.policy_analyzer:
-                    self.app.push_screen(ResourceDetailScreen(resource, self.policies, self.policy_analyzer, self.k8s_client))
+                if resource and self.policy_analyzer and self.k8s_client is not None:
+                    self.app.push_screen(
+                        ResourceDetailScreen(resource, self.policies, self.policy_analyzer, self.k8s_client)
+                    )
 
         elif tabs.active == "mispicks":
             table = self.query_one("#mispicks-table", DataTable)
@@ -329,7 +324,7 @@ ACTIONS:
             if hasattr(policy_name, "plain"):
                 policy_name = policy_name.plain
             policy = next((p for p in self.policies if p.name == policy_name), None)
-            if policy:
+            if policy and self.k8s_client is not None:
                 self.app.push_screen(PolicyDetailScreen(policy, self.k8s_client))
         elif event.data_table.id == "resources-table":
             resource_name = event.data_table.get_row_at(event.coordinate.row)[0]
@@ -337,8 +332,10 @@ ACTIONS:
             if hasattr(resource_name, "plain"):
                 resource_name = resource_name.plain
             resource = next((r for r in self.resources if r.name == resource_name), None)
-            if resource and self.policy_analyzer:
-                self.app.push_screen(ResourceDetailScreen(resource, self.policies, self.policy_analyzer, self.k8s_client))
+            if resource and self.policy_analyzer and self.k8s_client is not None:
+                self.app.push_screen(
+                    ResourceDetailScreen(resource, self.policies, self.policy_analyzer, self.k8s_client)
+                )
         elif event.data_table.id == "mispicks-table":
             error = self.mispicks_tab.get_error_at_row(event.coordinate.row)
             if error:
@@ -440,11 +437,15 @@ ACTIONS:
         tabs = self.query_one("#main-tabs", TabbedContent)
         if tabs.active == "mispicks":
             status_widget = self.query_one("#tailing-status", Static)
+
+            def update_callback() -> None:
+                self.call_after_refresh(self._update_mispicks_table)
+
             self.mispicks_tab.start_tailing(
                 status_widget,
                 self.mesh_adapter,
                 self.namespace_selector,
-                lambda: self.call_after_refresh(self._update_mispicks_table)
+                update_callback,
             )
 
     def action_stop_tailing(self) -> None:
@@ -507,7 +508,7 @@ ACTIONS:
                 success = await self.mesh_adapter.enroll_pod(resource.name, resource.namespace)
                 if success:
                     self.app.notify(f"Pod {resource.name} enrolled in mesh", severity="information", timeout=3)
-                    dashboard.update(f"Pod enrolled! Refreshing...")
+                    dashboard.update("Pod enrolled! Refreshing...")
                     # Small delay to let Kubernetes process the update
                     await asyncio.sleep(0.5)
                     # Refresh resources to show updated enrollment status
@@ -517,8 +518,8 @@ ACTIONS:
                     self.app.notify(f"Failed to enroll pod {resource.name}", severity="warning", timeout=5)
                     dashboard.update(f"Failed to enroll pod {resource.name}")
             except Exception as e:
-                self.app.notify(f"Error: {str(e)}", severity="error", timeout=5)
-                dashboard.update(f"Error enrolling: {str(e)}")
+                self.app.notify(f"Error: {e!s}", severity="error", timeout=5)
+                dashboard.update(f"Error enrolling: {e!s}")
 
     async def action_unenroll_pod(self) -> None:
         """Unenroll selected pod from mesh (only in Resources tab)."""
@@ -540,7 +541,9 @@ ACTIONS:
         if not resource or resource.type != "pod":
             # Show feedback
             dashboard = self.query_one("#dashboard-content", Static)
-            dashboard.update(f"Cannot unenroll {resource.type if resource else 'unknown'} - only pods can be unenrolled")
+            dashboard.update(
+                f"Cannot unenroll {resource.type if resource else 'unknown'} - only pods can be unenrolled"
+            )
             return
 
         # Check if namespace is mesh-enabled
@@ -553,9 +556,9 @@ ACTIONS:
                 dashboard = self.query_one("#dashboard-content", Static)
                 dashboard.update(f"Pod cannot be removed from mesh - entire namespace '{current_ns_name}' is enrolled")
                 self.app.notify(
-                    f"Pod cannot be removed from mesh as the entire namespace is enrolled",
+                    "Pod cannot be removed from mesh as the entire namespace is enrolled",
                     severity="warning",
-                    timeout=5
+                    timeout=5,
                 )
                 return
 
@@ -569,7 +572,7 @@ ACTIONS:
                 success = await self.mesh_adapter.unenroll_pod(resource.name, resource.namespace)
                 if success:
                     self.app.notify(f"Pod {resource.name} unenrolled from mesh", severity="information", timeout=3)
-                    dashboard.update(f"Pod unenrolled! Refreshing...")
+                    dashboard.update("Pod unenrolled! Refreshing...")
                     # Small delay to let Kubernetes process the update
                     await asyncio.sleep(0.5)
                     # Refresh resources to show updated enrollment status
@@ -579,8 +582,8 @@ ACTIONS:
                     self.app.notify(f"Failed to unenroll pod {resource.name}", severity="warning", timeout=5)
                     dashboard.update(f"Failed to unenroll pod {resource.name}")
             except Exception as e:
-                self.app.notify(f"Error: {str(e)}", severity="error", timeout=5)
-                dashboard.update(f"Error unenrolling: {str(e)}")
+                self.app.notify(f"Error: {e!s}", severity="error", timeout=5)
+                dashboard.update(f"Error unenrolling: {e!s}")
 
     async def action_weave_policy(self) -> None:
         """Weave policy from selected error (only in Mispicks tab)."""
@@ -602,14 +605,14 @@ ACTIONS:
             self.app.notify(
                 "Source pod is not enrolled in mesh - enroll the source pod first before creating policies",
                 severity="warning",
-                timeout=5
+                timeout=5,
             )
             return
         elif error.error_type.value != "access_denied":
             self.app.notify(
                 f"Can only weave policies for access_denied errors, not {error.error_type.value}",
                 severity="warning",
-                timeout=5
+                timeout=5,
             )
             return
 
@@ -623,9 +626,7 @@ ACTIONS:
                 if policy:
                     policy_type = policy.labels.get("kubeloom.io/policy-type", "unknown")
                     self.app.notify(
-                        f"Policy {policy.name} ({policy_type}) woven successfully!",
-                        severity="information",
-                        timeout=5
+                        f"Policy {policy.name} ({policy_type}) woven successfully!", severity="information", timeout=5
                     )
 
                     # Refresh policies to show the new woven policy
@@ -634,7 +635,7 @@ ACTIONS:
                     self.app.notify("Failed to weave policy", severity="warning", timeout=5)
 
             except Exception as e:
-                self.app.notify(f"Error weaving policy: {str(e)}", severity="error", timeout=5)
+                self.app.notify(f"Error weaving policy: {e!s}", severity="error", timeout=5)
 
     async def action_unweave_policies(self) -> None:
         """Unweave all kubeloom-managed policies."""
@@ -651,7 +652,7 @@ ACTIONS:
                 self.app.notify(
                     f"Successfully removed {removed_count} woven {'policy' if removed_count == 1 else 'policies'}",
                     severity="information",
-                    timeout=5
+                    timeout=5,
                 )
 
                 # Refresh policies to reflect the changes
@@ -660,24 +661,26 @@ ACTIONS:
                 self.app.notify("No woven policies found to remove", severity="information", timeout=3)
 
         except Exception as e:
-            self.app.notify(f"Error unweaving policies: {str(e)}", severity="error", timeout=5)
+            self.app.notify(f"Error unweaving policies: {e!s}", severity="error", timeout=5)
 
     def action_quit(self) -> None:
         """Quit action."""
         self.app.exit()
 
-    async def on_tree_node_selected(self, event) -> None:
+    async def on_tree_node_selected(self, event: Tree.NodeSelected[Any]) -> None:
         """Handle namespace selection from tree."""
-        if event.node.data and self.namespace_selector:
-            # Check if the event came from either namespace tree
-            if (hasattr(event.node, 'tree') and
-                (event.node.tree.id in ["namespace-tree", "namespace-tree-resources"])):
-                # Find the index of the selected namespace
-                try:
-                    target_namespace = event.node.data
-                    current_index = self.namespaces_with_policies.index(target_namespace)
-                    self.namespace_selector.current_index = current_index
-                    self.namespace_selector.update_display()
-                    await self._refresh_policies()
-                except ValueError:
-                    pass  # Namespace not found in list
+        if (
+            event.node.data
+            and self.namespace_selector
+            and hasattr(event.node, "tree")
+            and event.node.tree.id in ["namespace-tree", "namespace-tree-resources"]
+        ):
+            # Find the index of the selected namespace
+            try:
+                target_namespace = event.node.data
+                current_index = self.namespaces_with_policies.index(target_namespace)
+                self.namespace_selector.current_index = current_index
+                self.namespace_selector.update_display()
+                await self._refresh_policies()
+            except ValueError:
+                pass  # Namespace not found in list

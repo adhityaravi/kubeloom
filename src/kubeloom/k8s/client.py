@@ -1,8 +1,9 @@
 """Kubernetes client implementation."""
 
 import asyncio
+from collections.abc import AsyncIterator
 from queue import Queue
-from typing import Any, AsyncIterator
+from typing import Any
 
 from kubernetes import client, config, watch
 from kubernetes.client.exceptions import ApiException
@@ -80,11 +81,11 @@ class K8sClient(ClusterClient):
 
             # Get current context
             _, active_context = config.list_kube_config_contexts()
-            current_context = active_context['name'] if active_context else "unknown"
+            current_context = active_context["name"] if active_context else "unknown"
 
             # Get cluster name and server
             cluster_name = current_context
-            api_server = active_context['context']['cluster'] if active_context else "unknown"
+            api_server = active_context["context"]["cluster"] if active_context else "unknown"
 
             # Count nodes
             assert self._core_v1 is not None
@@ -102,7 +103,7 @@ class K8sClient(ClusterClient):
                 kubernetes_version=version_info.git_version,
                 nodes_count=nodes_count,
                 namespaces_count=namespaces_count,
-                namespaces=namespaces
+                namespaces=namespaces,
             )
 
             return cluster
@@ -110,12 +111,7 @@ class K8sClient(ClusterClient):
         except Exception as e:
             raise RuntimeError(f"Failed to get cluster info: {e}") from e
 
-    async def get_resources(
-        self,
-        api_version: str,
-        kind: str,
-        namespace: str | None = None
-    ) -> list[dict[str, Any]]:
+    async def get_resources(self, api_version: str, kind: str, namespace: str | None = None) -> list[dict[str, Any]]:
         """Get Kubernetes resources of a specific type."""
         await self._ensure_connected()
 
@@ -135,17 +131,12 @@ class K8sClient(ClusterClient):
             if namespace:
                 assert self._custom_objects is not None
                 response = self._custom_objects.list_namespaced_custom_object(
-                    group=group,
-                    version=version,
-                    namespace=namespace,
-                    plural=self._get_plural_name(kind)
+                    group=group, version=version, namespace=namespace, plural=self._get_plural_name(kind)
                 )
             else:
                 assert self._custom_objects is not None
                 response = self._custom_objects.list_cluster_custom_object(
-                    group=group,
-                    version=version,
-                    plural=self._get_plural_name(kind)
+                    group=group, version=version, plural=self._get_plural_name(kind)
                 )
 
             items = response.get("items", [])
@@ -228,7 +219,7 @@ class K8sClient(ClusterClient):
         namespace: str,
         container: str | None = None,
         follow: bool = True,
-        tail_lines: int | None = 10
+        tail_lines: int | None = 10,
     ) -> AsyncIterator[str]:
         """
         Stream logs from a pod using daemon threads.
@@ -249,23 +240,24 @@ class K8sClient(ClusterClient):
         await self._ensure_connected()
 
         assert self._core_v1 is not None
+        core_v1 = self._core_v1  # Capture for lambda
 
         # Queue for receiving log lines from daemon thread
-        log_queue: Queue = Queue()
+        log_queue: Queue[tuple[str, Any]] = Queue()
         stop_flag = {"stop": False}
 
-        def stream_logs_in_thread():
+        def stream_logs_in_thread() -> None:
             """Run log streaming in a daemon thread."""
             try:
                 w = watch.Watch()
                 stream = w.stream(
-                    self._core_v1.read_namespaced_pod_log,
+                    core_v1.read_namespaced_pod_log,
                     name=pod_name,
                     namespace=namespace,
                     container=container,
                     follow=follow,
                     tail_lines=tail_lines,
-                    timestamps=True
+                    timestamps=True,
                 )
 
                 for line in stream:
@@ -287,10 +279,9 @@ class K8sClient(ClusterClient):
 
         # Start daemon thread for log streaming
         import threading
+
         thread = threading.Thread(
-            target=stream_logs_in_thread,
-            daemon=True,  # Won't block exit
-            name=f"log-stream-{pod_name}"
+            target=stream_logs_in_thread, daemon=True, name=f"log-stream-{pod_name}"  # Won't block exit
         )
         thread.start()
 
@@ -319,9 +310,7 @@ class K8sClient(ClusterClient):
             stop_flag["stop"] = True
 
     async def get_pods_by_label(
-        self,
-        namespace: str | None = None,
-        label_selector: str | None = None
+        self, namespace: str | None = None, label_selector: str | None = None
     ) -> list[dict[str, Any]]:
         """
         Get pods filtered by label selector.
@@ -337,20 +326,16 @@ class K8sClient(ClusterClient):
 
         try:
             assert self._core_v1 is not None
+            core_v1 = self._core_v1  # Capture for lambda
 
             # Run blocking k8s API call in default thread pool
             loop = asyncio.get_event_loop()
 
-            def get_pods():
+            def get_pods() -> list[dict[str, Any]]:
                 if namespace:
-                    response = self._core_v1.list_namespaced_pod(
-                        namespace=namespace,
-                        label_selector=label_selector
-                    )
+                    response = core_v1.list_namespaced_pod(namespace=namespace, label_selector=label_selector)
                 else:
-                    response = self._core_v1.list_pod_for_all_namespaces(
-                        label_selector=label_selector
-                    )
+                    response = core_v1.list_pod_for_all_namespaces(label_selector=label_selector)
                 return [pod.to_dict() for pod in response.items]
 
             # Use default executor (None) for non-streaming operations
@@ -360,12 +345,7 @@ class K8sClient(ClusterClient):
             raise RuntimeError(f"Failed to get pods: {e}") from e
 
     async def create_custom_object(
-        self,
-        group: str,
-        version: str,
-        namespace: str,
-        plural: str,
-        body: dict[str, Any]
+        self, group: str, version: str, namespace: str, plural: str, body: dict[str, Any]
     ) -> dict[str, Any]:
         """
         Create a custom Kubernetes object.
@@ -387,30 +367,22 @@ class K8sClient(ClusterClient):
 
         try:
             assert self._custom_objects is not None
+            custom_objects = self._custom_objects  # Capture for lambda
 
             loop = asyncio.get_event_loop()
             result = await loop.run_in_executor(
                 None,
-                lambda: self._custom_objects.create_namespaced_custom_object(
-                    group=group,
-                    version=version,
-                    namespace=namespace,
-                    plural=plural,
-                    body=body
-                )
+                lambda: custom_objects.create_namespaced_custom_object(
+                    group=group, version=version, namespace=namespace, plural=plural, body=body
+                ),
             )
-            return result
+            return dict(result)
 
         except ApiException as e:
             raise RuntimeError(f"Failed to create {plural} in {namespace}: {e}") from e
 
     async def delete_custom_object(
-        self,
-        group: str,
-        version: str,
-        namespace: str,
-        plural: str,
-        name: str
+        self, group: str, version: str, namespace: str, plural: str, name: str
     ) -> dict[str, Any]:
         """
         Delete a custom Kubernetes object.
@@ -432,30 +404,22 @@ class K8sClient(ClusterClient):
 
         try:
             assert self._custom_objects is not None
+            custom_objects = self._custom_objects  # Capture for lambda
 
             loop = asyncio.get_event_loop()
             result = await loop.run_in_executor(
                 None,
-                lambda: self._custom_objects.delete_namespaced_custom_object(
-                    group=group,
-                    version=version,
-                    namespace=namespace,
-                    plural=plural,
-                    name=name
-                )
+                lambda: custom_objects.delete_namespaced_custom_object(
+                    group=group, version=version, namespace=namespace, plural=plural, name=name
+                ),
             )
-            return result
+            return dict(result)
 
         except ApiException as e:
             raise RuntimeError(f"Failed to delete {plural}/{name} in {namespace}: {e}") from e
 
     async def list_custom_objects(
-        self,
-        group: str,
-        version: str,
-        namespace: str,
-        plural: str,
-        label_selector: str | None = None
+        self, group: str, version: str, namespace: str, plural: str, label_selector: str | None = None
     ) -> dict[str, Any]:
         """
         List custom Kubernetes objects with optional label selector.
@@ -477,29 +441,21 @@ class K8sClient(ClusterClient):
 
         try:
             assert self._custom_objects is not None
+            custom_objects = self._custom_objects  # Capture for lambda
 
             loop = asyncio.get_event_loop()
             result = await loop.run_in_executor(
                 None,
-                lambda: self._custom_objects.list_namespaced_custom_object(
-                    group=group,
-                    version=version,
-                    namespace=namespace,
-                    plural=plural,
-                    label_selector=label_selector
-                )
+                lambda: custom_objects.list_namespaced_custom_object(
+                    group=group, version=version, namespace=namespace, plural=plural, label_selector=label_selector
+                ),
             )
-            return result
+            return dict(result)
 
         except ApiException as e:
             raise RuntimeError(f"Failed to list {plural} in {namespace}: {e}") from e
 
-    async def patch_pod(
-        self,
-        name: str,
-        namespace: str,
-        body: dict[str, Any]
-    ) -> dict[str, Any]:
+    async def patch_pod(self, name: str, namespace: str, body: dict[str, Any]) -> dict[str, Any]:
         """
         Patch a pod (e.g., to update labels).
 
@@ -518,17 +474,13 @@ class K8sClient(ClusterClient):
 
         try:
             assert self._core_v1 is not None
+            core_v1 = self._core_v1  # Capture for lambda
 
             loop = asyncio.get_event_loop()
             result = await loop.run_in_executor(
-                None,
-                lambda: self._core_v1.patch_namespaced_pod(
-                    name=name,
-                    namespace=namespace,
-                    body=body
-                )
+                None, lambda: core_v1.patch_namespaced_pod(name=name, namespace=namespace, body=body)
             )
-            return result.to_dict()
+            return dict(result.to_dict())
 
         except ApiException as e:
             raise RuntimeError(f"Failed to patch pod {namespace}/{name}: {e}") from e
@@ -547,23 +499,21 @@ class K8sClient(ClusterClient):
 
         try:
             assert self._core_v1 is not None
+            core_v1 = self._core_v1  # Capture for lambda
 
             # Use field selector to efficiently find pod by IP
             loop = asyncio.get_event_loop()
             response = await loop.run_in_executor(
-                None,
-                lambda: self._core_v1.list_pod_for_all_namespaces(
-                    field_selector=f"status.podIP={ip}"
-                )
+                None, lambda: core_v1.list_pod_for_all_namespaces(field_selector=f"status.podIP={ip}")
             )
 
             # Return first matching pod (IPs are unique)
             if response.items:
-                return response.items[0].to_dict()
+                return dict(response.items[0].to_dict())
 
             return None
 
-        except ApiException as e:
+        except ApiException:
             # Field selector might not be supported in older K8s versions
             # Silently return None rather than error
             return None
@@ -583,25 +533,22 @@ class K8sClient(ClusterClient):
 
         try:
             assert self._core_v1 is not None
+            core_v1 = self._core_v1  # Capture for lambda
 
             loop = asyncio.get_event_loop()
             response = await loop.run_in_executor(
-                None,
-                lambda: self._core_v1.read_namespaced_pod(
-                    name=name,
-                    namespace=namespace
-                )
+                None, lambda: core_v1.read_namespaced_pod(name=name, namespace=namespace)
             )
-            return response.to_dict()
+            return dict(response.to_dict())
 
-        except ApiException as e:
+        except ApiException:
             # Pod not found or other error
             return None
 
     async def close(self) -> None:
         """Close the client connection and cleanup resources."""
         # Close API client
-        if self._api_client and hasattr(self._api_client, 'close'):
+        if self._api_client and hasattr(self._api_client, "close"):
             if asyncio.iscoroutinefunction(self._api_client.close):
                 await self._api_client.close()
             else:

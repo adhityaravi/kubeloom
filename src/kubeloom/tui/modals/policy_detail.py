@@ -1,27 +1,28 @@
 """Policy detail screen."""
 
+from typing import Any, ClassVar
+
 import yaml
+from rich.panel import Panel
 from textual import work
 from textual.app import ComposeResult
-from textual.containers import Container, VerticalScroll
-from textual.widgets import Header, Footer, Static, LoadingIndicator
-from textual.screen import Screen
 from textual.binding import Binding
-from rich.panel import Panel
-from rich.syntax import Syntax
+from textual.containers import VerticalScroll
+from textual.screen import Screen
+from textual.widgets import Footer, Header, LoadingIndicator, Static
 
-from ...core.models import Policy
-from ...k8s.client import K8sClient
+from kubeloom.core.models import Policy
+from kubeloom.k8s.client import K8sClient
 
 
-class PolicyDetailScreen(Screen):
+class PolicyDetailScreen(Screen[None]):
     """Screen for showing policy details."""
 
-    BINDINGS = [
+    BINDINGS: ClassVar[list[Binding | tuple[str, str] | tuple[str, str, str]]] = [
         Binding("escape", "app.pop_screen", "Back"),
     ]
 
-    def __init__(self, policy: Policy, k8s_client: K8sClient = None):
+    def __init__(self, policy: Policy, k8s_client: K8sClient | None = None):
         super().__init__()
         self.policy = policy
         self.k8s_client = k8s_client
@@ -79,22 +80,22 @@ class PolicyDetailScreen(Screen):
 """
         return Panel(content, title=f"Policy: {self.policy.name}", border_style="cyan")
 
-    def _format_dict(self, d: dict) -> str:
+    def _format_dict(self, d: dict[str, Any]) -> str:
         """Format dictionary for display."""
         if not d:
             return "  None"
         return "\n".join(f"  {k}: {v}" for k, v in d.items())
 
-    def _format_yaml(self, obj) -> str:
+    def _format_yaml(self, obj: Any) -> str:
         """Format object as YAML."""
         try:
             formatted = yaml.dump(obj, default_flow_style=False, indent=2, sort_keys=False)
             # Add some indentation to align with other content
-            lines = formatted.split('\n')
-            return '\n'.join(f"  {line}" for line in lines if line.strip())
+            lines = formatted.split("\n")
+            return "\n".join(f"  {line}" for line in lines if line.strip())
         except (yaml.YAMLError, TypeError):
             # Fallback if object is not YAML serializable
-            return f"  {str(obj)}"
+            return f"  {obj!s}"
 
     def _format_action(self) -> str:
         """Format policy action (allow/deny/audit)."""
@@ -117,11 +118,18 @@ class PolicyDetailScreen(Screen):
             tree_lines.append("├── Service Accounts")
             for i, sa in enumerate(self.policy.source.service_accounts):
                 is_last_sa = i == len(self.policy.source.service_accounts) - 1
-                sa_prefix = "└──" if is_last_sa and not any([
-                    self.policy.source.workload_labels,
-                    self.policy.source.namespaces,
-                    self.policy.source.ip_blocks
-                ]) else "├──"
+                sa_prefix = (
+                    "└──"
+                    if is_last_sa
+                    and not any(
+                        [
+                            self.policy.source.workload_labels,
+                            self.policy.source.namespaces,
+                            self.policy.source.ip_blocks,
+                        ]
+                    )
+                    else "├──"
+                )
 
                 # Extract namespace from principals for this SA
                 sa_namespace = self.policy.namespace
@@ -140,11 +148,18 @@ class PolicyDetailScreen(Screen):
                 # Get controllers and pods for this service account
                 controllers_tree = await self._build_service_account_tree(sa, self.policy.namespace)
                 for line in controllers_tree:
-                    indent = "│       " if not is_last_sa or any([
-                        self.policy.source.workload_labels,
-                        self.policy.source.namespaces,
-                        self.policy.source.ip_blocks
-                    ]) else "        "
+                    indent = (
+                        "│       "
+                        if not is_last_sa
+                        or any(
+                            [
+                                self.policy.source.workload_labels,
+                                self.policy.source.namespaces,
+                                self.policy.source.ip_blocks,
+                            ]
+                        )
+                        else "        "
+                    )
                     tree_lines.append(f"{indent}{line}")
 
         # Workload Labels - show tree: Labels → Pods
@@ -256,7 +271,8 @@ class PolicyDetailScreen(Screen):
         """Format routes in :port/path format."""
         if not self.policy.allowed_routes:
             # No routes means "allow nothing" for ALLOW policies
-            from ...core.models import ActionType
+            from kubeloom.core.models import ActionType
+
             if self.policy.action and self.policy.action.type == ActionType.ALLOW:
                 return "[bold]Routes:[/bold] [red]No routes allowed[/red]"
             else:
@@ -298,13 +314,13 @@ class PolicyDetailScreen(Screen):
 
         if route_parts:
             routes_lines = ["[bold]Routes:[/bold]"]
-            for route in route_parts:
-                routes_lines.append(f"  • {route}")
+            for route_part in route_parts:
+                routes_lines.append(f"  • {route_part}")
             return "\n".join(routes_lines)
         else:
             return "[bold]Routes:[/bold] All routes allowed"
 
-    async def _resolve_service_account_pods(self, service_account: str, namespace: str) -> list:
+    async def _resolve_service_account_pods(self, service_account: str, namespace: str) -> list[str]:
         """Resolve service account to actual pods using it."""
         if not self.k8s_client:
             return []
@@ -332,17 +348,12 @@ class PolicyDetailScreen(Screen):
                                 sa_index = i
 
                         # Extract namespace if valid format
-                        if ns_index >= 0 and sa_index >= 0 and ns_index < sa_index:
-                            if ns_index + 1 < len(parts):
-                                target_namespace = parts[ns_index + 1]
-                                break
+                        if ns_index >= 0 and sa_index >= 0 and ns_index < sa_index and ns_index + 1 < len(parts):
+                            target_namespace = parts[ns_index + 1]
+                            break
 
             # Get all pods in the target namespace
-            pods = await self.k8s_client.get_resources(
-                api_version="v1",
-                kind="Pod",
-                namespace=target_namespace
-            )
+            pods = await self.k8s_client.get_resources(api_version="v1", kind="Pod", namespace=target_namespace)
 
             matching_pods = []
             for pod in pods:
@@ -356,18 +367,14 @@ class PolicyDetailScreen(Screen):
         except Exception:
             return []
 
-    async def _resolve_label_selector_pods(self, labels: dict, namespace: str) -> list:
+    async def _resolve_label_selector_pods(self, labels: dict[str, str], namespace: str) -> list[str]:
         """Resolve label selector to actual pods matching it."""
         if not self.k8s_client:
             return []
 
         try:
             # Get all pods in the namespace
-            pods = await self.k8s_client.get_resources(
-                api_version="v1",
-                kind="Pod",
-                namespace=namespace
-            )
+            pods = await self.k8s_client.get_resources(api_version="v1", kind="Pod", namespace=namespace)
 
             matching_pods = []
             for pod in pods:
@@ -375,25 +382,20 @@ class PolicyDetailScreen(Screen):
                 pod_name = pod.get("metadata", {}).get("name", "")
 
                 # Check if all selector labels match
-                if all(pod_labels.get(k) == v for k, v in labels.items()):
-                    if pod_name:
-                        matching_pods.append(pod_name)
+                if all(pod_labels.get(k) == v for k, v in labels.items()) and pod_name:
+                    matching_pods.append(pod_name)
             return matching_pods
         except Exception:
             return []
 
-    async def _resolve_service_pods(self, service: str, namespace: str) -> list:
+    async def _resolve_service_pods(self, service: str, namespace: str) -> list[str]:
         """Resolve service to actual pods behind it."""
         if not self.k8s_client:
             return []
 
         try:
             # Get the service
-            services = await self.k8s_client.get_resources(
-                api_version="v1",
-                kind="Service",
-                namespace=namespace
-            )
+            services = await self.k8s_client.get_resources(api_version="v1", kind="Service", namespace=namespace)
 
             service_selector = None
             for svc in services:
@@ -433,10 +435,9 @@ class PolicyDetailScreen(Screen):
                             elif part == "sa":
                                 sa_index = i
 
-                        if ns_index >= 0 and sa_index >= 0 and ns_index < sa_index:
-                            if ns_index + 1 < len(parts):
-                                target_namespace = parts[ns_index + 1]
-                                break
+                        if ns_index >= 0 and sa_index >= 0 and ns_index < sa_index and ns_index + 1 < len(parts):
+                            target_namespace = parts[ns_index + 1]
+                            break
 
             # Get workload controllers in the target namespace
             controllers = await self._get_workload_controllers(target_namespace)
@@ -449,11 +450,7 @@ class PolicyDetailScreen(Screen):
                     controllers_using_sa.append(controller)
 
             # Get all pods in the target namespace
-            pods = await self.k8s_client.get_resources(
-                api_version="v1",
-                kind="Pod",
-                namespace=target_namespace
-            )
+            pods = await self.k8s_client.get_resources(api_version="v1", kind="Pod", namespace=target_namespace)
 
             # Build the tree
             if controllers_using_sa:
@@ -475,7 +472,7 @@ class PolicyDetailScreen(Screen):
                             pod_prefix = "└──" if is_last_pod else "├──"
                             controller_indent = "    " if is_last_controller else "│   "
 
-                            pod_name, actual_sa, matches = pod_info
+                            pod_name, _actual_sa, matches = pod_info
                             if matches:
                                 status_text = f"[green]{target_namespace}/{pod_name}[/green]"
                             else:
@@ -511,9 +508,9 @@ class PolicyDetailScreen(Screen):
             return tree_lines
 
         except Exception as e:
-            return [f"└── [red]Error resolving service account: {str(e)}[/red]"]
+            return [f"└── [red]Error resolving service account: {e!s}[/red]"]
 
-    async def _get_workload_controllers(self, namespace: str) -> list[dict]:
+    async def _get_workload_controllers(self, namespace: str) -> list[dict[str, Any]]:
         """Get all workload controllers (StatefulSets, Deployments, etc.) in a namespace."""
         if not self.k8s_client:
             return []
@@ -523,61 +520,63 @@ class PolicyDetailScreen(Screen):
         try:
             # Get StatefulSets
             statefulsets = await self.k8s_client.get_resources(
-                api_version="apps/v1",
-                kind="StatefulSet",
-                namespace=namespace
+                api_version="apps/v1", kind="StatefulSet", namespace=namespace
             )
             for ss in statefulsets:
                 name = ss.get("metadata", {}).get("name", "unknown")
                 sa = ss.get("spec", {}).get("template", {}).get("spec", {}).get("serviceAccountName", "default")
-                controllers.append({
-                    "name": name,
-                    "type": "StatefulSet",
-                    "serviceAccountName": sa,
-                    "selector": ss.get("spec", {}).get("selector", {}).get("matchLabels", {}),
-                    "kind": "StatefulSet"
-                })
+                controllers.append(
+                    {
+                        "name": name,
+                        "type": "StatefulSet",
+                        "serviceAccountName": sa,
+                        "selector": ss.get("spec", {}).get("selector", {}).get("matchLabels", {}),
+                        "kind": "StatefulSet",
+                    }
+                )
 
             # Get Deployments
             deployments = await self.k8s_client.get_resources(
-                api_version="apps/v1",
-                kind="Deployment",
-                namespace=namespace
+                api_version="apps/v1", kind="Deployment", namespace=namespace
             )
             for deploy in deployments:
                 name = deploy.get("metadata", {}).get("name", "unknown")
                 sa = deploy.get("spec", {}).get("template", {}).get("spec", {}).get("serviceAccountName", "default")
-                controllers.append({
-                    "name": name,
-                    "type": "Deployment",
-                    "serviceAccountName": sa,
-                    "selector": deploy.get("spec", {}).get("selector", {}).get("matchLabels", {}),
-                    "kind": "Deployment"
-                })
+                controllers.append(
+                    {
+                        "name": name,
+                        "type": "Deployment",
+                        "serviceAccountName": sa,
+                        "selector": deploy.get("spec", {}).get("selector", {}).get("matchLabels", {}),
+                        "kind": "Deployment",
+                    }
+                )
 
             # Get DaemonSets
             daemonsets = await self.k8s_client.get_resources(
-                api_version="apps/v1",
-                kind="DaemonSet",
-                namespace=namespace
+                api_version="apps/v1", kind="DaemonSet", namespace=namespace
             )
             for ds in daemonsets:
                 name = ds.get("metadata", {}).get("name", "unknown")
                 sa = ds.get("spec", {}).get("template", {}).get("spec", {}).get("serviceAccountName", "default")
-                controllers.append({
-                    "name": name,
-                    "type": "DaemonSet",
-                    "serviceAccountName": sa,
-                    "selector": ds.get("spec", {}).get("selector", {}).get("matchLabels", {}),
-                    "kind": "DaemonSet"
-                })
+                controllers.append(
+                    {
+                        "name": name,
+                        "type": "DaemonSet",
+                        "serviceAccountName": sa,
+                        "selector": ds.get("spec", {}).get("selector", {}).get("matchLabels", {}),
+                        "kind": "DaemonSet",
+                    }
+                )
 
         except Exception:
             pass
 
         return controllers
 
-    def _find_pods_for_controller(self, pods: list, controller: dict) -> list[tuple[str, str, bool]]:
+    def _find_pods_for_controller(
+        self, pods: list[dict[str, Any]], controller: dict[str, Any]
+    ) -> list[tuple[str, str, bool]]:
         """Find pods managed by a controller and check if they use the expected service account."""
         managed_pods = []
         controller_name = controller["name"]
@@ -592,7 +591,7 @@ class PolicyDetailScreen(Screen):
 
             if controller_type == "StatefulSet":
                 # StatefulSet pods follow pattern: <name>-<ordinal>
-                if pod_name.startswith(f"{controller_name}-") and pod_name[len(controller_name)+1:].isdigit():
+                if pod_name.startswith(f"{controller_name}-") and pod_name[len(controller_name) + 1 :].isdigit():
                     is_managed = True
             else:
                 # For Deployments and DaemonSets, check owner references or labels

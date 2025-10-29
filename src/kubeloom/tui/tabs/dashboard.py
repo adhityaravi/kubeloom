@@ -1,12 +1,9 @@
 """Dashboard tab component."""
 
-from typing import List, Optional
 from rich.panel import Panel
-from rich.text import Text
-from rich.table import Table as RichTable
 
-from ...core.models import Policy, ServiceMesh
-from ..widgets import NamespaceSelector
+from kubeloom.core.models import Policy, ServiceMesh
+from kubeloom.tui.widgets import NamespaceSelector
 
 
 class DashboardTab:
@@ -14,25 +11,25 @@ class DashboardTab:
 
     @staticmethod
     def render(
-        service_mesh: Optional[ServiceMesh],
-        namespaces_with_policies: List[str],
-        policies: List[Policy],
-        namespace_selector: Optional[NamespaceSelector]
+        service_mesh: ServiceMesh | None,
+        namespaces_with_policies: list[str],
+        policies: list[Policy],
+        namespace_selector: NamespaceSelector | None,
     ) -> Panel:
         """Render dashboard content."""
         if not service_mesh:
             return Panel(
                 "[red]No mesh connection available[/red]",
                 title="[bold red]Connection Error[/bold red]",
-                border_style="red"
+                border_style="red",
             )
 
-        current_ns = namespace_selector.get_current_namespace() if namespace_selector else "unknown"
+        namespace_selector.get_current_namespace() if namespace_selector else "unknown"
         total_namespaces = len(namespaces_with_policies)
         total_policies = len(policies)
 
         # Policy type breakdown
-        policy_types = {}
+        policy_types: dict[str, int] = {}
         for policy in policies:
             policy_type = policy.type.value
             policy_types[policy_type] = policy_types.get(policy_type, 0) + 1

@@ -1,6 +1,6 @@
 """Command line interface for kubeloom."""
 
-from .cli import cli
+from kubeloom.cli import cli
 
 if __name__ == "__main__":
     cli()

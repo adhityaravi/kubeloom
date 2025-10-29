@@ -1,18 +1,19 @@
 """Policies tab component."""
 
-from typing import List, Optional
-from textual.widgets import DataTable, Tree
-from rich.text import Text
+from typing import Any
 
-from ...core.models import Policy
-from ...core.interfaces import MeshAdapter
+from rich.text import Text
+from textual.widgets import DataTable, Tree
+
+from kubeloom.core.interfaces import MeshAdapter
+from kubeloom.core.models import Policy
 
 
 class PoliciesTab:
     """Policies tab logic."""
 
     @staticmethod
-    def update_table(table: DataTable, policies: List[Policy]) -> None:
+    def update_table(table: DataTable[Any], policies: list[Policy]) -> None:
         """Update the policies table."""
         table.clear(columns=True)
 
@@ -33,7 +34,7 @@ class PoliciesTab:
                     Text(str(policy.type.value), style="cyan"),
                     Text(str(policy.status.value), style="cyan"),
                     Text(str(len(policy.targets)), style="cyan"),
-                    Text(str(len(policy.allowed_routes)), style="cyan")
+                    Text(str(len(policy.allowed_routes)), style="cyan"),
                 )
             else:
                 table.add_row(
@@ -41,15 +42,15 @@ class PoliciesTab:
                     str(policy.type.value),
                     str(policy.status.value),
                     str(len(policy.targets)),
-                    str(len(policy.allowed_routes))
+                    str(len(policy.allowed_routes)),
                 )
 
     @staticmethod
     async def update_namespace_tree(
-        tree: Tree,
-        namespaces_with_policies: List[str],
-        current_namespace: Optional[str],
-        mesh_adapter: Optional[MeshAdapter]
+        tree: Tree[Any],
+        namespaces_with_policies: list[str],
+        current_namespace: str | None,
+        mesh_adapter: MeshAdapter | None,
     ) -> None:
         """Update the namespace tree with namespaces that have policies."""
         tree.clear()

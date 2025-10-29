@@ -1,6 +1,6 @@
 """Core domain models and interfaces for kubeloom."""
 
-from .models import Policy, ServiceMesh, Namespace
-from .interfaces import MeshAdapter, PolicyAnalyzer, PolicyExporter
+from kubeloom.core.interfaces import MeshAdapter, PolicyAnalyzer, PolicyExporter
+from kubeloom.core.models import Namespace, Policy, ServiceMesh
 
-__all__ = ["Policy", "ServiceMesh", "Namespace", "MeshAdapter", "PolicyAnalyzer", "PolicyExporter"]
+__all__ = ["MeshAdapter", "Namespace", "Policy", "PolicyAnalyzer", "PolicyExporter", "ServiceMesh"]

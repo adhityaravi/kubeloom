@@ -1,34 +1,37 @@
 """Resource detail screen for viewing resource policy impacts."""
 
-from typing import List, Optional
-from textual import work
-from textual.app import ComposeResult
-from textual.containers import Container, VerticalScroll
-from textual.widgets import Header, Footer, Static, LoadingIndicator
-from textual.screen import Screen
-from textual.binding import Binding
+from typing import ClassVar
+
 from rich.console import RenderableType
 from rich.panel import Panel
+from textual import work
+from textual.app import ComposeResult
+from textual.binding import Binding
+from textual.containers import VerticalScroll
+from textual.screen import Screen
+from textual.widgets import Footer, Header, LoadingIndicator, Static
 
-from ...core.models import Policy
-from ...core.services import PolicyAnalyzer, ResourceInfo, ResourcePolicyAnalysis
-from ...core.interfaces import ClusterClient
+from kubeloom.core.interfaces import ClusterClient
+from kubeloom.core.models import AllowedRoute, Policy
+from kubeloom.core.services import PolicyAnalyzer, ResourceInfo, ResourcePolicyAnalysis
 
 
-class ResourceDetailScreen(Screen):
+class ResourceDetailScreen(Screen[None]):
     """Screen for viewing detailed information about a resource and its policy impacts."""
 
-    BINDINGS = [
+    BINDINGS: ClassVar[list[Binding | tuple[str, str] | tuple[str, str, str]]] = [
         Binding("escape", "app.pop_screen", "Back"),
     ]
 
-    def __init__(self, resource: ResourceInfo, policies: List[Policy], policy_analyzer: PolicyAnalyzer, k8s_client: ClusterClient):
+    def __init__(
+        self, resource: ResourceInfo, policies: list[Policy], policy_analyzer: PolicyAnalyzer, k8s_client: ClusterClient
+    ):
         super().__init__()
         self.resource = resource
         self.policies = policies
         self.policy_analyzer = policy_analyzer
         self.k8s_client = k8s_client
-        self.analysis: Optional[ResourcePolicyAnalysis] = None
+        self.analysis: ResourcePolicyAnalysis | None = None
 
     def compose(self) -> ComposeResult:
         yield Header(show_clock=False)
@@ -60,7 +63,7 @@ class ResourceDetailScreen(Screen):
             # Show error and hide loading indicator
             self.query_one("#loading", LoadingIndicator).display = False
             detail_widget = self.query_one("#resource-detail", Static)
-            detail_widget.update(f"Error loading resource analysis: {str(e)}")
+            detail_widget.update(f"Error loading resource analysis: {e!s}")
             detail_widget.display = True
 
     def _format_resource_detail(self) -> RenderableType:
@@ -82,7 +85,7 @@ class ResourceDetailScreen(Screen):
         return Panel(
             "\n\n".join(content_sections),
             title=f"[bold]{self.resource.type.title()}: {self.resource.name}[/bold]",
-            border_style="blue"
+            border_style="blue",
         )
 
     def _format_resource_overview(self) -> str:
@@ -102,17 +105,16 @@ class ResourceDetailScreen(Screen):
 
         return "\n".join(lines)
 
-
     def _format_inbound_access(self) -> str:
         """Format inbound access (what can reach this resource)."""
         lines = ["[bold green]Inbound Access[/bold green]"]
 
-        if not self.analysis.inbound_access:
+        if not self.analysis or not self.analysis.inbound_access:
             lines.append("[dim]No explicit inbound access defined[/dim]")
             return "\n".join(lines)
 
         # Group by resource type for better organization
-        grouped = {}
+        grouped: dict[str, list[tuple[ResourceInfo, list[AllowedRoute]]]] = {}
         for source_resource, routes in self.analysis.inbound_access:
             if source_resource.type not in grouped:
                 grouped[source_resource.type] = []
@@ -133,12 +135,12 @@ class ResourceDetailScreen(Screen):
         """Format outbound access (what this resource can reach)."""
         lines = ["[bold blue]Outbound Access[/bold blue]"]
 
-        if not self.analysis.outbound_access:
+        if not self.analysis or not self.analysis.outbound_access:
             lines.append("[dim]No explicit outbound access defined[/dim]")
             return "\n".join(lines)
 
         # Group by resource type for better organization
-        grouped = {}
+        grouped: dict[str, list[tuple[ResourceInfo, list[AllowedRoute]]]] = {}
         for target_resource, routes in self.analysis.outbound_access:
             if target_resource.type not in grouped:
                 grouped[target_resource.type] = []
@@ -155,7 +157,7 @@ class ResourceDetailScreen(Screen):
 
         return "\n".join(lines)
 
-    def _format_routes_inline(self, routes: List, indent: str = "  ") -> str:
+    def _format_routes_inline(self, routes: list[AllowedRoute], indent: str = "  ") -> str:
         """Format routes with each property on its own line."""
         if not routes:
             return f"{indent}Routes: All routes allowed"
@@ -163,20 +165,20 @@ class ResourceDetailScreen(Screen):
         lines = [f"{indent}Routes:"]
 
         for route in routes:
-            if hasattr(route, 'allow_all') and route.allow_all:
+            if hasattr(route, "allow_all") and route.allow_all:
                 return f"{indent}Routes: All routes allowed"
-            elif hasattr(route, 'deny_all') and route.deny_all:
+            elif hasattr(route, "deny_all") and route.deny_all:
                 return f"{indent}Routes: [red]No routes allowed[/red]"
 
             # Put each property on its own line
-            if hasattr(route, 'methods') and route.methods:
+            if hasattr(route, "methods") and route.methods:
                 methods = [m.value for m in route.methods]
                 lines.append(f"{indent}  Methods: {', '.join(methods)}")
 
-            if hasattr(route, 'paths') and route.paths:
+            if hasattr(route, "paths") and route.paths:
                 lines.append(f"{indent}  Paths: {', '.join(route.paths)}")
 
-            if hasattr(route, 'ports') and route.ports:
+            if hasattr(route, "ports") and route.ports:
                 lines.append(f"{indent}  Ports: {', '.join(map(str, route.ports))}")
 
         # If we only added the header, no actual routes were found
@@ -184,4 +186,3 @@ class ResourceDetailScreen(Screen):
             return f"{indent}Routes: All routes allowed"
 
         return "\n".join(lines)
-

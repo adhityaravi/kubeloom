@@ -1,7 +1,7 @@
 """Policy exporters."""
 
-from .json_exporter import JSONExporter
-from .yaml_exporter import YAMLExporter
-from .csv_exporter import CSVExporter
+from kubeloom.exporters.csv_exporter import CSVExporter
+from kubeloom.exporters.json_exporter import JSONExporter
+from kubeloom.exporters.yaml_exporter import YAMLExporter
 
-__all__ = ["JSONExporter", "YAMLExporter", "CSVExporter"]
+__all__ = ["CSVExporter", "JSONExporter", "YAMLExporter"]

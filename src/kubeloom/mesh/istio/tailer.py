@@ -1,28 +1,30 @@
 """Smart log tailing with adaptive backoff for quiet pods."""
 
 import asyncio
-from datetime import datetime, timedelta
-from typing import Dict, Optional, AsyncIterator, List, Set
+from collections.abc import AsyncIterator
 from dataclasses import dataclass
+from datetime import datetime, timedelta
+from typing import Any
 
-from ...core.models import AccessError
-from ...core.models.errors import ErrorType
-from ...k8s.client import K8sClient
-from .log_parser import IstioLogParser
+from kubeloom.core.models import AccessError
+from kubeloom.core.models.errors import ErrorType
+from kubeloom.k8s.client import K8sClient
+from kubeloom.mesh.istio.log_parser import IstioLogParser
 
 
 @dataclass
 class PodTailState:
     """Track the state of a pod being tailed."""
+
     pod_name: str
     pod_namespace: str
     is_waypoint: bool
-    last_error_time: Optional[datetime] = None
-    last_checked: datetime = None
+    last_error_time: datetime | None = None
+    last_checked: datetime | None = None
     is_active: bool = False  # Currently being tailed
     error_count: int = 0  # Total errors seen from this pod
 
-    def __post_init__(self):
+    def __post_init__(self) -> None:
         if self.last_checked is None:
             self.last_checked = datetime.now()
 
@@ -57,18 +59,18 @@ class SmartLogTailer:
     SELECTIVE_PHASE_DURATION = 0  # Disabled - immediately switch back to active
     MAX_CONCURRENT_TAILS = 100  # Limit concurrent tails
 
-    def __init__(self, k8s_client: K8sClient, log_parser: IstioLogParser, mesh_adapter=None):
+    def __init__(self, k8s_client: K8sClient, log_parser: IstioLogParser, mesh_adapter: Any = None) -> None:
         self.k8s_client = k8s_client
         self.log_parser = log_parser
         self.mesh_adapter = mesh_adapter  # Optional mesh adapter for enrollment checks
-        self.pod_states: Dict[str, PodTailState] = {}
-        self.active_tasks: Dict[str, asyncio.Task] = {}
-        self.error_queue: asyncio.Queue[Optional[AccessError]] = asyncio.Queue()
+        self.pod_states: dict[str, PodTailState] = {}
+        self.active_tasks: dict[str, asyncio.Task[None]] = {}
+        self.error_queue: asyncio.Queue[AccessError | None] = asyncio.Queue()
         self.is_running = False
         self.phase = "active"  # "active" or "selective"
         self.phase_start_time = datetime.now()
 
-    async def discover_pods(self) -> List[PodTailState]:
+    async def discover_pods(self) -> list[PodTailState]:
         """
         Discover all ztunnel and waypoint pods across all namespaces.
 
@@ -79,8 +81,7 @@ class SmartLogTailer:
 
         # Find all ztunnel pods (search all namespaces)
         ztunnel_pods = await self.k8s_client.get_pods_by_label(
-            namespace=None,  # All namespaces
-            label_selector="app=ztunnel"
+            namespace=None, label_selector="app=ztunnel"  # All namespaces
         )
 
         for pod in ztunnel_pods:
@@ -92,18 +93,13 @@ class SmartLogTailer:
             if pod_key in self.pod_states:
                 discovered.append(self.pod_states[pod_key])
             else:
-                state = PodTailState(
-                    pod_name=pod_name,
-                    pod_namespace=pod_namespace,
-                    is_waypoint=False
-                )
+                state = PodTailState(pod_name=pod_name, pod_namespace=pod_namespace, is_waypoint=False)
                 self.pod_states[pod_key] = state
                 discovered.append(state)
 
         # Find all waypoint pods (search all namespaces)
         waypoint_pods = await self.k8s_client.get_pods_by_label(
-            namespace=None,  # All namespaces
-            label_selector="gateway.istio.io/managed=istio.io-mesh-controller"
+            namespace=None, label_selector="gateway.istio.io/managed=istio.io-mesh-controller"  # All namespaces
         )
 
         for pod in waypoint_pods:
@@ -115,11 +111,7 @@ class SmartLogTailer:
             if pod_key in self.pod_states:
                 discovered.append(self.pod_states[pod_key])
             else:
-                state = PodTailState(
-                    pod_name=pod_name,
-                    pod_namespace=pod_namespace,
-                    is_waypoint=True
-                )
+                state = PodTailState(pod_name=pod_name, pod_namespace=pod_namespace, is_waypoint=True)
                 self.pod_states[pod_key] = state
                 discovered.append(state)
 
@@ -194,7 +186,7 @@ class SmartLogTailer:
                 print(f"Error in phase manager: {e}")
                 await asyncio.sleep(5)  # Wait before retrying
 
-    async def _start_tailing_pods(self, pods: List[PodTailState]) -> None:
+    async def _start_tailing_pods(self, pods: list[PodTailState]) -> None:
         """Start tailing a list of pods."""
         for pod_state in pods:
             if pod_state.is_active:
@@ -205,9 +197,7 @@ class SmartLogTailer:
                 break
 
             # Start tailing this pod
-            task = asyncio.create_task(
-                self._tail_pod(pod_state)
-            )
+            task = asyncio.create_task(self._tail_pod(pod_state))
             self.active_tasks[pod_state.pod_key] = task
             pod_state.is_active = True
             pod_state.last_checked = datetime.now()
@@ -216,10 +206,7 @@ class SmartLogTailer:
         """Tail a single pod and push errors to queue."""
         try:
             async for log_line in self.k8s_client.stream_pod_logs(
-                pod_name=pod_state.pod_name,
-                namespace=pod_state.pod_namespace,
-                follow=True,
-                tail_lines=10
+                pod_name=pod_state.pod_name, namespace=pod_state.pod_namespace, follow=True, tail_lines=10
             ):
                 if not self.is_running:
                     break
@@ -229,7 +216,7 @@ class SmartLogTailer:
                     log_line=log_line,
                     pod_name=pod_state.pod_name,
                     pod_namespace=pod_state.pod_namespace,
-                    is_waypoint=pod_state.is_waypoint
+                    is_waypoint=pod_state.is_waypoint,
                 )
 
                 if error:
@@ -297,10 +284,7 @@ class SmartLogTailer:
                 # We have workload info from log, look up the pod to verify enrollment
                 if error.source_namespace:
                     # Get pod by name and namespace
-                    pod = await self.k8s_client.get_pod(
-                        name=error.source_workload,
-                        namespace=error.source_namespace
-                    )
+                    pod = await self.k8s_client.get_pod(name=error.source_workload, namespace=error.source_namespace)
 
                     if not pod:
                         # Pod not found - likely deleted or workload name is incorrect
@@ -320,7 +304,9 @@ class SmartLogTailer:
                     if not is_enrolled:
                         # Pod not enrolled - reclassify
                         error.error_type = ErrorType.SOURCE_NOT_ON_MESH
-                        error.reason = f"Source pod {error.source_namespace}/{error.source_workload} is not enrolled in mesh"
+                        error.reason = (
+                            f"Source pod {error.source_namespace}/{error.source_workload} is not enrolled in mesh"
+                        )
                         return error
 
                     # Pod is enrolled - enrich with service account if we don't have it
@@ -336,7 +322,9 @@ class SmartLogTailer:
                         else:
                             # Pod doesn't have SA specified, Kubernetes uses "default"
                             error.source_service_account = "default"
-                            print(f"Warning: Pod {error.source_namespace}/{error.source_workload} has no service_account_name in spec, using 'default'")
+                            print(
+                                f"Warning: Pod {error.source_namespace}/{error.source_workload} has no service_account_name in spec, using 'default'"
+                            )
 
         except Exception as e:
             # On error, keep original classification but log
@@ -350,10 +338,7 @@ class SmartLogTailer:
             await asyncio.sleep(1)
 
             # Remove completed tasks
-            completed = [
-                key for key, task in self.active_tasks.items()
-                if task.done()
-            ]
+            completed = [key for key, task in self.active_tasks.items() if task.done()]
             for key in completed:
                 del self.active_tasks[key]
 

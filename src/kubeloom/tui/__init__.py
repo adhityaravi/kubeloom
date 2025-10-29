@@ -1,5 +1,5 @@
 """Terminal User Interface."""
 
-from .app import KubeloomApp, run
+from kubeloom.tui.app import KubeloomApp, run
 
 __all__ = ["KubeloomApp", "run"]

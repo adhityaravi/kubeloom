@@ -1,26 +1,27 @@
 """Core interfaces for kubeloom."""
 
 from abc import ABC, abstractmethod
-from typing import Dict, List, Optional, Any, AsyncIterator
+from collections.abc import AsyncGenerator
+from typing import Any
 
-from .models import Policy, Cluster, Namespace, ServiceMesh, PolicyValidation, PolicyConflict, AccessError
+from kubeloom.core.models import AccessError, Cluster, Namespace, Policy, PolicyConflict, PolicyValidation, ServiceMesh
 
 
 class MeshAdapter(ABC):
     """Interface for service mesh adapters."""
 
     @abstractmethod
-    async def detect(self) -> Optional[ServiceMesh]:
+    async def detect(self) -> ServiceMesh | None:
         """Detect if this service mesh is installed in the cluster."""
         pass
 
     @abstractmethod
-    async def get_policies(self, namespace: str) -> List[Policy]:
+    async def get_policies(self, namespace: str) -> list[Policy]:
         """Get all policies for a namespace."""
         pass
 
     @abstractmethod
-    async def get_policy(self, name: str, namespace: str, policy_type: str) -> Optional[Policy]:
+    async def get_policy(self, name: str, namespace: str, policy_type: str) -> Policy | None:
         """Get a specific policy by name and type."""
         pass
 
@@ -35,12 +36,12 @@ class MeshAdapter(ABC):
         pass
 
     @abstractmethod
-    def get_supported_policy_types(self) -> List[str]:
+    def get_supported_policy_types(self) -> list[str]:
         """Get list of policy types supported by this mesh."""
         pass
 
     @abstractmethod
-    async def tail_access_logs(self, namespace: Optional[str] = None) -> AsyncIterator[AccessError]:
+    def tail_access_logs(self, namespace: str | None = None) -> AsyncGenerator[AccessError, None]:
         """
         Tail access logs from the mesh and yield parsed access errors.
 
@@ -56,10 +57,10 @@ class MeshAdapter(ABC):
         Yields:
             AccessError objects as they are parsed from logs.
         """
-        pass
+        ...
 
     @abstractmethod
-    def is_pod_enrolled(self, pod: Dict[str, Any], namespace: Namespace) -> bool:
+    def is_pod_enrolled(self, pod: dict[str, Any], namespace: Namespace) -> bool:
         """
         Check if a pod is enrolled in the service mesh.
 
@@ -113,7 +114,7 @@ class MeshAdapter(ABC):
         pass
 
     @abstractmethod
-    async def weave_policy(self, error: AccessError) -> Optional[Policy]:
+    async def weave_policy(self, error: AccessError) -> Policy | None:
         """
         Auto-generate a minimal policy to resolve an access error.
 
@@ -131,7 +132,7 @@ class MeshAdapter(ABC):
         pass
 
     @abstractmethod
-    async def unweave_policies(self, namespace: Optional[str] = None) -> int:
+    async def unweave_policies(self, namespace: str | None = None) -> int:
         """
         Remove all kubeloom-managed policies.
 
@@ -144,7 +145,7 @@ class MeshAdapter(ABC):
         pass
 
     @abstractmethod
-    async def get_woven_policies(self, namespace: str) -> List[Policy]:
+    async def get_woven_policies(self, namespace: str) -> list[Policy]:
         """
         Get all kubeloom-managed (woven) policies in a namespace.
 
@@ -166,17 +167,17 @@ class PolicyAnalyzer(ABC):
         pass
 
     @abstractmethod
-    def find_conflicts(self, policies: List[Policy]) -> List[PolicyConflict]:
+    def find_conflicts(self, policies: list[Policy]) -> list[PolicyConflict]:
         """Find conflicts between policies."""
         pass
 
     @abstractmethod
-    def suggest_improvements(self, policy: Policy) -> List[str]:
+    def suggest_improvements(self, policy: Policy) -> list[str]:
         """Suggest improvements for a policy."""
         pass
 
     @abstractmethod
-    def check_security_issues(self, policy: Policy) -> List[str]:
+    def check_security_issues(self, policy: Policy) -> list[str]:
         """Check for security issues in a policy."""
         pass
 
@@ -185,17 +186,17 @@ class PolicyExporter(ABC):
     """Interface for exporting policies to different formats."""
 
     @abstractmethod
-    def export_policies(self, policies: List[Policy], output_path: str) -> None:
+    def export_policies(self, policies: list[Policy], output_path: str) -> None:
         """Export policies to a file."""
         pass
 
     @abstractmethod
-    def get_supported_formats(self) -> List[str]:
+    def get_supported_formats(self) -> list[str]:
         """Get list of supported export formats."""
         pass
 
     @abstractmethod
-    def serialize_policy(self, policy: Policy) -> Dict[str, Any]:
+    def serialize_policy(self, policy: Policy) -> dict[str, Any]:
         """Serialize a single policy to a dictionary."""
         pass
 
@@ -204,7 +205,7 @@ class ClusterClient(ABC):
     """Interface for Kubernetes cluster clients."""
 
     @abstractmethod
-    async def get_namespaces(self) -> List[Namespace]:
+    async def get_namespaces(self) -> list[Namespace]:
         """Get all namespaces in the cluster."""
         pass
 
@@ -214,7 +215,7 @@ class ClusterClient(ABC):
         pass
 
     @abstractmethod
-    async def get_resources(self, api_version: str, kind: str, namespace: Optional[str] = None) -> List[Dict[str, Any]]:
+    async def get_resources(self, api_version: str, kind: str, namespace: str | None = None) -> list[dict[str, Any]]:
         """Get Kubernetes resources of a specific type."""
         pass
 
@@ -228,7 +229,7 @@ class EventListener(ABC):
     """Interface for listening to policy events."""
 
     @abstractmethod
-    async def start_watching(self, namespace: Optional[str] = None) -> None:
+    async def start_watching(self, namespace: str | None = None) -> None:
         """Start watching for policy changes."""
         pass
 
