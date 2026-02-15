@@ -87,6 +87,9 @@ class MainScreen(Screen[None]):
         # Cache for namespace policy counts (avoids redundant API calls)
         self._namespace_policy_counts: dict[str, int] = {}
 
+        # Cache for pod enrollment status
+        self._enrollment_cache: dict[str, bool] = {}
+
     def compose(self) -> ComposeResult:
         with Container(id="main-container"):
             yield Static(f"[{Colors.PURPLE.value} bold]ｋｕｂｅｌｏｏｍ[/]", id="app-title")
@@ -230,17 +233,51 @@ class MainScreen(Screen[None]):
         if not self.policy_analyzer or not self.policies:
             self.resources = []
             self._resource_cursor = 0
-            await self._update_resources_list()
+            self._enrollment_cache = {}
+            self._update_resources_list()
             return
 
         try:
             self.resources = await self.policy_analyzer.get_all_affected_resources(self.policies)
             self._resource_cursor = self._clamp_cursor(self._resource_cursor, len(self.resources))
-            await self._update_resources_list()
+
+            # Pre-compute enrollment status for all resources
+            await self._cache_enrollment_status()
+
+            self._update_resources_list()
         except Exception:
             self.resources = []
             self._resource_cursor = 0
-            await self._update_resources_list()
+            self._enrollment_cache = {}
+            self._update_resources_list()
+
+    async def _cache_enrollment_status(self) -> None:
+        """Pre-compute and cache enrollment status for all resources."""
+        self._enrollment_cache = {}
+        current_namespace = self._get_current_namespace_obj()
+
+        if not self.mesh_adapter or not self.k8s_client or not current_namespace:
+            return
+
+        # Get all pods in namespace once
+        pods_by_name: dict[str, dict] = {}
+        try:
+            pods = await self.k8s_client.get_resources("v1", "Pod", current_namespace.name)
+            pods_by_name = {p.get("metadata", {}).get("name"): p for p in pods}
+        except Exception:
+            return
+
+        # Check enrollment for each pod resource
+        for resource in self.resources:
+            if resource.type != "pod":
+                self._enrollment_cache[resource.name] = True
+                continue
+
+            pod = pods_by_name.get(resource.name)
+            if pod:
+                self._enrollment_cache[resource.name] = self.mesh_adapter.is_pod_enrolled(pod, current_namespace)
+            else:
+                self._enrollment_cache[resource.name] = True
 
     # ─── List Rendering ───────────────────────────────────────────────────────
 
@@ -287,20 +324,20 @@ class MainScreen(Screen[None]):
 
         policies_list.update("\n".join(lines) if lines else "[dim]No policies[/dim]")
 
-    async def _update_resources_list(self) -> None:
+    def _update_resources_list(self) -> None:
         """Update the resources list display."""
         self._filtered_resources = self._apply_filter(self.resources, self._resource_filter)
         self._resource_cursor = self._clamp_cursor(self._resource_cursor, len(self._filtered_resources))
-        await self._render_resources_list()
+        self._render_resources_list()
 
-    async def _render_resources_list(self) -> None:
+    def _render_resources_list(self) -> None:
         """Render the resources list widget."""
         resources_list = self.query_one("#resources-list", Static)
-        current_namespace = self._get_current_namespace_obj()
         lines = []
 
         for i, resource in enumerate(self._filtered_resources):
-            is_enrolled = await self._check_pod_enrollment(resource, current_namespace)
+            # Use cached enrollment status
+            is_enrolled = self._enrollment_cache.get(resource.name, True)
             label = Labels.resource_type(resource.type)
             selected = i == self._resource_cursor
 
@@ -313,17 +350,6 @@ class MainScreen(Screen[None]):
                 lines.append(f"{label} {resource.name}")
 
         resources_list.update("\n".join(lines) if lines else "[dim]No resources[/dim]")
-
-    async def _check_pod_enrollment(self, resource: ResourceInfo, namespace: Any) -> bool:
-        """Check if a pod is enrolled in the mesh."""
-        if resource.type != "pod" or not self.mesh_adapter or not self.k8s_client or not namespace:
-            return True
-        try:
-            pods = await self.k8s_client.get_resources("v1", "Pod", resource.namespace)
-            pod = next((p for p in pods if p.get("metadata", {}).get("name") == resource.name), None)
-            return self.mesh_adapter.is_pod_enrolled(pod, namespace) if pod else True
-        except Exception:
-            return True
 
     def _get_current_namespace_obj(self) -> Any:
         """Get the current namespace object."""
@@ -612,7 +638,7 @@ class MainScreen(Screen[None]):
             self._render_policies_list()
         elif tab == TAB_RESOURCES and self._resource_cursor > 0:
             self._resource_cursor -= 1
-            self._run_background(self._render_resources_list())
+            self._render_resources_list()
         elif tab == TAB_MISPICKS:
             self.query_one("#mispicks-table", DataTable).action_cursor_up()
         self._update_current_detail()
@@ -625,7 +651,7 @@ class MainScreen(Screen[None]):
             self._render_policies_list()
         elif tab == TAB_RESOURCES and self._resource_cursor < len(self._filtered_resources) - 1:
             self._resource_cursor += 1
-            self._run_background(self._render_resources_list())
+            self._render_resources_list()
         elif tab == TAB_MISPICKS:
             self.query_one("#mispicks-table", DataTable).action_cursor_down()
         self._update_current_detail()
@@ -831,7 +857,7 @@ class MainScreen(Screen[None]):
             self._update_policies_list()
         elif tab == TAB_RESOURCES:
             self._resource_filter = ""
-            self._run_background(self._update_resources_list())
+            self._update_resources_list()
         elif tab == TAB_MISPICKS:
             self._mispicks_filter = ""
             self._update_mispicks_table()
@@ -861,7 +887,7 @@ class MainScreen(Screen[None]):
         elif input_id == "resources-filter":
             self._resource_filter = event.value
             self._resource_cursor = 0
-            self._run_background(self._update_resources_list())
+            self._update_resources_list()
             self._update_current_detail()
         elif input_id == "mispicks-filter":
             self._mispicks_filter = event.value
