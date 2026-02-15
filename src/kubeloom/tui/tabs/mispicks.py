@@ -5,7 +5,7 @@ from collections import deque
 from collections.abc import Callable
 from typing import Any
 
-from textual.widgets import DataTable, Static
+from textual.widgets import DataTable
 
 from kubeloom.core.interfaces import MeshAdapter
 from kubeloom.core.models.errors import AccessError
@@ -20,17 +20,16 @@ class MispicksTab:
         self.access_errors: deque[AccessError] = deque(maxlen=1000)  # Max 1000 errors in memory
         self.access_error_hashes: set[int] = set()  # For deduplication
         self.log_tailer_task: asyncio.Task[None] | None = None
+        self._status_callback: Callable[[bool, str], None] | None = None
+        self._filtered_errors: list[AccessError] = []  # Current filtered view
 
     def init_table(self, table: DataTable[Any]) -> None:
         """Initialize the mispicks table columns."""
-        # No width specified - let Textual auto-size based on content
         table.add_column("Time")
-        table.add_column("Type")
-        table.add_column("Source")
-        table.add_column("Target")
-        table.add_column("Reason")
+        table.add_column("Component")
+        table.add_column("Namespace")
 
-    def update_table(self, table: DataTable[Any]) -> None:
+    def update_table(self, table: DataTable[Any], filter_text: str = "") -> None:
         """Update the mispicks table with current errors."""
         table.clear()
 
@@ -38,76 +37,64 @@ class MispicksTab:
         # Reverse to show most recent first
         sorted_errors = list(reversed(self.access_errors))
 
-        for error in sorted_errors:
+        # Apply filter
+        if filter_text:
+            filter_lower = filter_text.lower()
+            self._filtered_errors = [
+                e for e in sorted_errors
+                if (filter_lower in (e.pod_name or "").lower()
+                    or filter_lower in (e.pod_namespace or "").lower()
+                    or filter_lower in (e.source_workload or "").lower()
+                    or filter_lower in (e.target_service or "").lower())
+            ]
+        else:
+            self._filtered_errors = sorted_errors
+
+        for error in self._filtered_errors:
             # Format timestamp (already in local timezone from K8s logs)
-            timestamp_str = error.timestamp.strftime("%Y-%m-%d %H:%M:%S") if error.timestamp else "-"
+            timestamp_str = error.timestamp.strftime("%H:%M:%S") if error.timestamp else "-"
 
-            # Format source
-            if error.source_workload and error.source_namespace:
-                source = f"{error.source_namespace}/{error.source_workload}"
-            elif error.source_ip:
-                source = error.source_ip
-            else:
-                source = "-"
+            # Component (pod name where error was logged, e.g. ztunnel)
+            component = error.pod_name or "-"
 
-            # Format target
-            if error.target_service:
-                target = error.target_service
-                if error.target_port:
-                    target = f"{target}:{error.target_port}"
-            elif error.target_workload and error.target_namespace:
-                target = f"{error.target_namespace}/{error.target_workload}"
-                if error.target_port:
-                    target = f"{target}:{error.target_port}"
-            elif error.target_ip:
-                target = error.target_ip
-                if error.target_port:
-                    target = f"{target}:{error.target_port}"
-            else:
-                target = "-"
-
-            # Format HTTP details if present
-            if error.http_method or error.http_path:
-                http_details = f"{error.http_method or ''} {error.http_path or ''}".strip()
-                target = f"{target} ({http_details})"
+            # Namespace (pod namespace where error was logged)
+            namespace = error.pod_namespace or "-"
 
             table.add_row(
                 timestamp_str,
-                error.error_type.value,
-                source,
-                target,
-                error.reason[:100] if error.reason else "-",  # Truncate long reasons
+                component,
+                namespace,
             )
 
     def get_error_at_row(self, row: int) -> AccessError | None:
-        """Get the error at the specified row index."""
-        if len(self.access_errors) == 0:
+        """Get the error at the specified row index (from filtered list)."""
+        if not self._filtered_errors:
             return None
-        sorted_errors: list[AccessError] = list(reversed(self.access_errors))
-        if row < len(sorted_errors):
-            return sorted_errors[row]
+        if row < len(self._filtered_errors):
+            return self._filtered_errors[row]
         return None
 
     def start_tailing(
         self,
-        status_widget: Static,
         mesh_adapter: MeshAdapter | None,
         namespace_selector: NamespaceSelector | None,
         update_callback: Callable[[], None],
+        status_callback: Callable[[bool, str], None],
     ) -> None:
         """Start tailing access logs from mesh."""
         if self.is_tailing_logs or not mesh_adapter:
             return
 
         self.is_tailing_logs = True
-        status_widget.update("Status: Running")
+        self._status_callback = status_callback
+        status_callback(True, "Tailing")
 
         # Start background worker
         self.log_tailer_task = asyncio.create_task(
-            self._tail_logs_worker(mesh_adapter, namespace_selector, status_widget, update_callback)
+            self._tail_logs_worker(mesh_adapter, namespace_selector, update_callback, status_callback)
         )
 
-    def stop_tailing(self, status_widget: Static) -> None:
+    def stop_tailing(self) -> None:
         """Stop tailing access logs."""
         if not self.is_tailing_logs:
             return
@@ -119,7 +106,8 @@ class MispicksTab:
             self.log_tailer_task.cancel()
             self.log_tailer_task = None
 
-        status_widget.update("Status: Stopped")
+        if self._status_callback:
+            self._status_callback(False, "Stopped")
 
     def clear_errors(self) -> None:
         """Clear all collected errors."""
@@ -130,8 +118,8 @@ class MispicksTab:
         self,
         mesh_adapter: MeshAdapter,
         namespace_selector: NamespaceSelector | None,
-        status_widget: Static,
         update_callback: Callable[[], None],
+        status_callback: Callable[[bool, str], None],
     ) -> None:
         """Background worker that tails logs and updates the error table."""
         try:
@@ -165,5 +153,5 @@ class MispicksTab:
             pass
         except Exception as e:
             # Log error and stop tailing
-            status_widget.update(f"Status: Error - {e!s}")
+            status_callback(False, f"Error: {e!s}")
             self.is_tailing_logs = False

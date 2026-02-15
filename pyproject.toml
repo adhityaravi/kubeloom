@@ -136,6 +136,7 @@ ignore = [
 [tool.ruff.per-file-ignores]
 "__init__.py" = ["F401"]  # unused import
 "tests/*" = ["S101"]  # use of assert
+"src/kubeloom/tui/screens/*.py" = ["SIM117", "RUF001"]  # nested with statements (Textual pattern), fullwidth chars
 
 [tool.black]
 line-length = 120

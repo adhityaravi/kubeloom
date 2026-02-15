@@ -29,7 +29,6 @@ class ResourcesTab:
         table.add_column("Type")
         table.add_column("Service Account")
         table.add_column("Policies")
-        table.add_column("Labels")
 
         # Group resources by type
         grouped_resources: dict[str, list[ResourceInfo]] = {}
@@ -65,11 +64,6 @@ class ResourcesTab:
                     1 for policy in policies if ResourcesTab._resource_affected_by_policy(resource, policy)
                 )
 
-                # Format labels (show first few key=value pairs)
-                labels_str = ", ".join([f"{k}={v}" for k, v in list(resource.labels.items())[:2]])
-                if len(resource.labels) > 2:
-                    labels_str += f"... (+{len(resource.labels) - 2})"
-
                 # Check mesh enrollment for pods
                 is_enrolled = True
                 if resource.type == "pod" and mesh_adapter and k8s_client and current_namespace:
@@ -89,7 +83,6 @@ class ResourcesTab:
                         Text(resource.type, style="red"),
                         Text(resource.service_account or "-", style="red"),
                         Text(str(affecting_policies), style="red"),
-                        Text(labels_str or "-", style="red"),
                     )
                 else:
                     table.add_row(
@@ -97,7 +90,6 @@ class ResourcesTab:
                         resource.type,
                         resource.service_account or "-",
                         str(affecting_policies),
-                        labels_str or "-",
                     )
 
     @staticmethod

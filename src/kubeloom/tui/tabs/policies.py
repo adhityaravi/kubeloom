@@ -3,9 +3,8 @@
 from typing import Any
 
 from rich.text import Text
-from textual.widgets import DataTable, Tree
+from textual.widgets import DataTable
 
-from kubeloom.core.interfaces import MeshAdapter
 from kubeloom.core.models import Policy
 
 
@@ -44,33 +43,3 @@ class PoliciesTab:
                     str(len(policy.targets)),
                     str(len(policy.allowed_routes)),
                 )
-
-    @staticmethod
-    async def update_namespace_tree(
-        tree: Tree[Any],
-        namespaces_with_policies: list[str],
-        current_namespace: str | None,
-        mesh_adapter: MeshAdapter | None,
-    ) -> None:
-        """Update the namespace tree with namespaces that have policies."""
-        tree.clear()
-
-        for namespace in namespaces_with_policies:
-            # Get policy count for this namespace
-            try:
-                if mesh_adapter:
-                    policies = await mesh_adapter.get_policies(namespace)
-                    policy_count = len(policies)
-                else:
-                    policy_count = 0
-            except Exception:
-                policy_count = 0
-
-            # Make each namespace a leaf node with policy count in the label
-            if namespace == current_namespace:
-                node_label = f"[bold]{namespace}[/bold] ({policy_count})"
-            else:
-                node_label = f"{namespace} ({policy_count})"
-
-            leaf = tree.root.add_leaf(node_label)
-            leaf.data = namespace
