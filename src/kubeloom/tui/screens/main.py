@@ -84,6 +84,9 @@ class MainScreen(Screen[None]):
         self._filtered_policies: list[Policy] = []
         self._filtered_resources: list[ResourceInfo] = []
 
+        # Cache for namespace policy counts (avoids redundant API calls)
+        self._namespace_policy_counts: dict[str, int] = {}
+
     def compose(self) -> ComposeResult:
         with Container(id="main-container"):
             yield Static(f"[{Colors.PURPLE.value} bold]ｋｕｂｅｌｏｏｍ[/]", id="app-title")
@@ -138,7 +141,11 @@ class MainScreen(Screen[None]):
         table = self.query_one("#mispicks-table", DataTable)
         self.mispicks_tab.init_table(table)
 
-        await self._initialize()
+        # Show loading state
+        self.query_one("#policies-list", Static).update("[dim]Loading...[/]")
+
+        # Initialize in background so UI renders immediately
+        self._run_background(self._initialize())
 
     async def _initialize(self) -> None:
         """Initialize Kubernetes client and detect service mesh."""
@@ -171,11 +178,24 @@ class MainScreen(Screen[None]):
             namespaces = await self.k8s_client.get_namespaces()
             self.namespaces = namespaces
             self.namespaces_with_policies = []
+            self._namespace_policy_counts = {}
 
-            for namespace in namespaces:
-                policies = await self.mesh_adapter.get_policies(namespace.name)
-                if policies:
-                    self.namespaces_with_policies.append(namespace.name)
+            # Fetch AuthorizationPolicies for all namespaces in parallel
+            async def get_ns_policies(ns_name: str) -> tuple[str, int]:
+                policies = await self.mesh_adapter.get_authorization_policies(ns_name)
+                return (ns_name, len(policies))
+
+            results = await asyncio.gather(
+                *[get_ns_policies(ns.name) for ns in namespaces],
+                return_exceptions=True
+            )
+
+            for result in results:
+                if isinstance(result, tuple):
+                    ns_name, count = result
+                    if count > 0:
+                        self.namespaces_with_policies.append(ns_name)
+                        self._namespace_policy_counts[ns_name] = count
 
             if self.namespace_selector:
                 self.namespace_selector.set_namespaces(self.namespaces_with_policies)
@@ -196,7 +216,7 @@ class MainScreen(Screen[None]):
                 self._update_policies_list()
                 await self._refresh_resources()
                 self._update_status_bar()
-                await self._update_namespace_tree()
+                self._update_namespace_tree()
                 self._update_current_detail()
 
         except Exception as e:
@@ -314,19 +334,14 @@ class MainScreen(Screen[None]):
         table = self.query_one("#mispicks-table", DataTable)
         self.mispicks_tab.update_table(table, self._mispicks_filter)
 
-    async def _update_namespace_tree(self) -> None:
+    def _update_namespace_tree(self) -> None:
         """Update the namespace list with namespaces that have policies."""
         current_ns = self.namespace_selector.get_current_namespace() if self.namespace_selector else None
 
         tree = RichTree("[bold]All[/bold]", guide_style=Colors.SURFACE.value)
         for namespace in self.namespaces_with_policies:
-            policy_count = 0
-            try:
-                if self.mesh_adapter:
-                    policies = await self.mesh_adapter.get_policies(namespace)
-                    policy_count = len(policies)
-            except Exception:
-                pass
+            # Use cached count instead of making API calls
+            policy_count = self._namespace_policy_counts.get(namespace, 0)
 
             if namespace == current_ns:
                 label = f"[bold {Colors.CYAN.value}]{namespace}[/] ({policy_count})"

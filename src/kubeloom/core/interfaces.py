@@ -20,6 +20,14 @@ class MeshAdapter(ABC):
         """Get all policies for a namespace."""
         pass
 
+    async def get_authorization_policies(self, namespace: str) -> list[Policy]:
+        """Get only authorization policies for a namespace (fast path).
+
+        Default implementation falls back to get_policies().
+        Mesh adapters can override for faster queries.
+        """
+        return await self.get_policies(namespace)
+
     @abstractmethod
     async def get_policy(self, name: str, namespace: str, policy_type: str) -> Policy | None:
         """Get a specific policy by name and type."""

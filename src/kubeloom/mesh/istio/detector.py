@@ -76,34 +76,50 @@ class IstioDetector:
     async def _find_control_plane(self) -> tuple[str, dict[str, Any], str, str | None] | None:
         """Find Istio control plane deployment in any namespace."""
         try:
-            # Get all namespaces
+            # Check common Istio namespaces first (fast path)
+            common_namespaces = ["istio-system", "istio", "default"]
+
+            for ns_name in common_namespaces:
+                result = await self._check_namespace_for_istiod(ns_name)
+                if result:
+                    return result
+
+            # Fall back to checking all namespaces if not found
             namespaces = await self.k8s_client.get_namespaces()
-
             for namespace in namespaces:
-                # Get deployments in this namespace
-                deployments = await self.k8s_client.get_resources(
-                    api_version="apps/v1", kind="Deployment", namespace=namespace.name
-                )
-
-                for deployment in deployments:
-                    name = deployment.get("metadata", {}).get("name", "")
-                    labels = deployment.get("metadata", {}).get("labels", {})
-
-                    # Check if this is an Istio control plane deployment
-                    if (
-                        name.startswith("istiod")
-                        or "pilot" in name
-                        or labels.get("app") == "istiod"
-                        or "istio.io/rev" in labels
-                    ):
-
-                        version = self._extract_version(deployment)
-                        revision = self._extract_revision(deployment)
-
-                        return namespace.name, deployment, version, revision
+                if namespace.name in common_namespaces:
+                    continue  # Already checked
+                result = await self._check_namespace_for_istiod(namespace.name)
+                if result:
+                    return result
 
             return None
 
+        except Exception:
+            return None
+
+    async def _check_namespace_for_istiod(self, ns_name: str) -> tuple[str, dict[str, Any], str, str | None] | None:
+        """Check a specific namespace for istiod deployment."""
+        try:
+            deployments = await self.k8s_client.get_resources(
+                api_version="apps/v1", kind="Deployment", namespace=ns_name
+            )
+
+            for deployment in deployments:
+                name = deployment.get("metadata", {}).get("name", "")
+                labels = deployment.get("metadata", {}).get("labels", {})
+
+                if (
+                    name.startswith("istiod")
+                    or "pilot" in name
+                    or labels.get("app") == "istiod"
+                    or "istio.io/rev" in labels
+                ):
+                    version = self._extract_version(deployment)
+                    revision = self._extract_revision(deployment)
+                    return ns_name, deployment, version, revision
+
+            return None
         except Exception:
             return None
 

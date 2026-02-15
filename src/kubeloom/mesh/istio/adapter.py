@@ -120,6 +120,26 @@ class IstioAdapter(MeshAdapter):
 
         return policies
 
+    async def get_authorization_policies(self, namespace: str) -> list[Policy]:
+        """Get only AuthorizationPolicies for a namespace (fast path)."""
+        policies = []
+        api_info = self.POLICY_TYPES[PolicyType.AUTHORIZATION_POLICY]
+
+        try:
+            resources = await self.k8s_client.get_resources(
+                api_version=api_info["api_version"], kind=api_info["kind"], namespace=namespace
+            )
+
+            for resource in resources:
+                policy = self._convert_resource_to_policy(resource, PolicyType.AUTHORIZATION_POLICY)
+                if policy:
+                    policies.append(policy)
+
+        except Exception:
+            pass
+
+        return policies
+
     async def get_policy(self, name: str, namespace: str, policy_type: str) -> Policy | None:
         """Get a specific policy by name and type."""
         try:

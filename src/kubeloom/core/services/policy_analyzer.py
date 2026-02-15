@@ -55,9 +55,21 @@ class PolicyAnalyzer:
 
     def __init__(self, cluster_client: ClusterClient):
         self.cluster_client = cluster_client
+        # Cache for resources per namespace (cleared on each get_all_affected_resources call)
+        self._pods_cache: dict[str, list[dict]] = {}
+        self._services_cache: dict[str, list[dict]] = {}
 
     async def get_all_affected_resources(self, policies: list[Policy]) -> list[ResourceInfo]:
         """Get all resources that are affected by at least one policy."""
+        # Clear cache at start of analysis
+        self._pods_cache = {}
+        self._services_cache = {}
+
+        # Pre-fetch resources for all relevant namespaces
+        namespaces = {p.namespace for p in policies}
+        for ns in namespaces:
+            await self._prefetch_namespace_resources(ns)
+
         resources = set()
 
         for policy in policies:
@@ -72,6 +84,20 @@ class PolicyAnalyzer:
                 resources.update(source_resources)
 
         return list(resources)
+
+    async def _prefetch_namespace_resources(self, namespace: str) -> None:
+        """Pre-fetch and cache pods and services for a namespace."""
+        if namespace not in self._pods_cache:
+            try:
+                self._pods_cache[namespace] = await self.cluster_client.get_resources("v1", "Pod", namespace)
+            except Exception:
+                self._pods_cache[namespace] = []
+
+        if namespace not in self._services_cache:
+            try:
+                self._services_cache[namespace] = await self.cluster_client.get_resources("v1", "Service", namespace)
+            except Exception:
+                self._services_cache[namespace] = []
 
     async def _extract_resources_from_target(self, target: PolicyTarget, namespace: str) -> list[ResourceInfo]:
         """Extract resource information from a policy target."""
@@ -174,74 +200,67 @@ class PolicyAnalyzer:
 
     async def _get_service_info(self, service_name: str, namespace: str) -> ResourceInfo | None:
         """Get information about a service."""
-        try:
-            services = await self.cluster_client.get_resources("v1", "Service", namespace)
-            for service in services:
-                if service.get("metadata", {}).get("name") == service_name:
-                    return ResourceInfo(
-                        name=service_name,
-                        namespace=namespace,
-                        type="service",
-                        labels=service.get("metadata", {}).get("labels", {}),
-                    )
-        except Exception:
-            pass
+        # Use cache if available
+        if namespace not in self._services_cache:
+            await self._prefetch_namespace_resources(namespace)
+
+        for service in self._services_cache.get(namespace, []):
+            if service.get("metadata", {}).get("name") == service_name:
+                return ResourceInfo(
+                    name=service_name,
+                    namespace=namespace,
+                    type="service",
+                    labels=service.get("metadata", {}).get("labels", {}),
+                )
         return None
 
     async def _get_pod_info(self, pod_name: str, namespace: str) -> ResourceInfo | None:
         """Get information about a pod."""
-        try:
-            pods = await self.cluster_client.get_resources("v1", "Pod", namespace)
-            for pod in pods:
-                if pod.get("metadata", {}).get("name") == pod_name:
-                    # Get actual service account from spec (snake_case fields from K8s API)
-                    sa_name = pod.get("spec", {}).get("service_account_name")
-                    if not sa_name:
-                        sa_name = pod.get("spec", {}).get("service_account", "default")
+        # Use cache if available
+        if namespace not in self._pods_cache:
+            await self._prefetch_namespace_resources(namespace)
 
-                    return ResourceInfo(
-                        name=pod_name,
-                        namespace=namespace,
-                        type="pod",
-                        labels=pod.get("metadata", {}).get("labels", {}),
-                        service_account=sa_name,
-                    )
-        except Exception:
-            pass
+        for pod in self._pods_cache.get(namespace, []):
+            if pod.get("metadata", {}).get("name") == pod_name:
+                sa_name = pod.get("spec", {}).get("service_account_name")
+                if not sa_name:
+                    sa_name = pod.get("spec", {}).get("service_account", "default")
+
+                return ResourceInfo(
+                    name=pod_name,
+                    namespace=namespace,
+                    type="pod",
+                    labels=pod.get("metadata", {}).get("labels", {}),
+                    service_account=sa_name,
+                )
         return None
 
     async def _get_workloads_by_labels(self, labels: dict[str, str], namespace: str) -> list[ResourceInfo]:
         """Get workloads (pods, statefulsets, deployments) that match the given labels. NOT services."""
         resources = []
 
-        try:
-            # Check pods
-            pods = await self.cluster_client.get_resources("v1", "Pod", namespace)
-            for pod in pods:
-                pod_labels = pod.get("metadata", {}).get("labels", {})
-                if self._labels_match(labels, pod_labels):
-                    pod_name = pod.get("metadata", {}).get("name", "")
-                    if pod_name:
-                        # Get actual service account from spec (snake_case fields from K8s API)
-                        sa_name = pod.get("spec", {}).get("service_account_name")
-                        if not sa_name:
-                            sa_name = pod.get("spec", {}).get("service_account", "default")
+        # Use cache if available
+        if namespace not in self._pods_cache:
+            await self._prefetch_namespace_resources(namespace)
 
-                        resources.append(
-                            ResourceInfo(
-                                name=pod_name,
-                                namespace=namespace,
-                                type="pod",
-                                labels=pod_labels,
-                                service_account=sa_name,
-                            )
+        for pod in self._pods_cache.get(namespace, []):
+            pod_labels = pod.get("metadata", {}).get("labels", {})
+            if self._labels_match(labels, pod_labels):
+                pod_name = pod.get("metadata", {}).get("name", "")
+                if pod_name:
+                    sa_name = pod.get("spec", {}).get("service_account_name")
+                    if not sa_name:
+                        sa_name = pod.get("spec", {}).get("service_account", "default")
+
+                    resources.append(
+                        ResourceInfo(
+                            name=pod_name,
+                            namespace=namespace,
+                            type="pod",
+                            labels=pod_labels,
+                            service_account=sa_name,
                         )
-
-            # Note: We could also check StatefulSets/Deployments here if needed
-            # But typically workload labels target pods directly
-
-        except Exception:
-            pass
+                    )
 
         return resources
 
@@ -249,42 +268,37 @@ class PolicyAnalyzer:
         """Get resources that match the given labels."""
         resources = []
 
-        try:
-            # Check pods
-            pods = await self.cluster_client.get_resources("v1", "Pod", namespace)
-            for pod in pods:
-                pod_labels = pod.get("metadata", {}).get("labels", {})
-                if self._labels_match(labels, pod_labels):
-                    pod_name = pod.get("metadata", {}).get("name", "")
-                    if pod_name:
-                        # Get actual service account from spec (snake_case fields from K8s API)
-                        sa_name = pod.get("spec", {}).get("service_account_name")
-                        if not sa_name:
-                            sa_name = pod.get("spec", {}).get("service_account", "default")
+        # Use cache if available
+        if namespace not in self._pods_cache:
+            await self._prefetch_namespace_resources(namespace)
 
-                        resources.append(
-                            ResourceInfo(
-                                name=pod_name,
-                                namespace=namespace,
-                                type="pod",
-                                labels=pod_labels,
-                                service_account=sa_name,
-                            )
+        for pod in self._pods_cache.get(namespace, []):
+            pod_labels = pod.get("metadata", {}).get("labels", {})
+            if self._labels_match(labels, pod_labels):
+                pod_name = pod.get("metadata", {}).get("name", "")
+                if pod_name:
+                    sa_name = pod.get("spec", {}).get("service_account_name")
+                    if not sa_name:
+                        sa_name = pod.get("spec", {}).get("service_account", "default")
+
+                    resources.append(
+                        ResourceInfo(
+                            name=pod_name,
+                            namespace=namespace,
+                            type="pod",
+                            labels=pod_labels,
+                            service_account=sa_name,
                         )
+                    )
 
-            # Check services
-            services = await self.cluster_client.get_resources("v1", "Service", namespace)
-            for service in services:
-                service_labels = service.get("metadata", {}).get("labels", {})
-                if self._labels_match(labels, service_labels):
-                    service_name = service.get("metadata", {}).get("name", "")
-                    if service_name:
-                        resources.append(
-                            ResourceInfo(name=service_name, namespace=namespace, type="service", labels=service_labels)
-                        )
-
-        except Exception:
-            pass
+        for service in self._services_cache.get(namespace, []):
+            service_labels = service.get("metadata", {}).get("labels", {})
+            if self._labels_match(labels, service_labels):
+                service_name = service.get("metadata", {}).get("name", "")
+                if service_name:
+                    resources.append(
+                        ResourceInfo(name=service_name, namespace=namespace, type="service", labels=service_labels)
+                    )
 
         return resources
 
@@ -292,56 +306,30 @@ class PolicyAnalyzer:
         """Get all resources using a specific service account."""
         resources = []
 
-        try:
-            # Get pods using this service account
-            pods = await self.cluster_client.get_resources("v1", "Pod", namespace)
-            for pod in pods:
-                # Get actual service account from spec (snake_case fields from K8s API)
-                pod_sa = pod.get("spec", {}).get("service_account_name")
-                if not pod_sa:
-                    pod_sa = pod.get("spec", {}).get("service_account", "default")
+        # Use cache if available
+        if namespace not in self._pods_cache:
+            await self._prefetch_namespace_resources(namespace)
 
-                if pod_sa == sa_name:
-                    pod_name = pod.get("metadata", {}).get("name", "")
-                    if pod_name:
-                        resources.append(
-                            ResourceInfo(
-                                name=pod_name,
-                                namespace=namespace,
-                                type="pod",
-                                labels=pod.get("metadata", {}).get("labels", {}),
-                                service_account=sa_name,
-                            )
+        for pod in self._pods_cache.get(namespace, []):
+            pod_sa = pod.get("spec", {}).get("service_account_name")
+            if not pod_sa:
+                pod_sa = pod.get("spec", {}).get("service_account", "default")
+
+            if pod_sa == sa_name:
+                pod_name = pod.get("metadata", {}).get("name", "")
+                if pod_name:
+                    resources.append(
+                        ResourceInfo(
+                            name=pod_name,
+                            namespace=namespace,
+                            type="pod",
+                            labels=pod.get("metadata", {}).get("labels", {}),
+                            service_account=sa_name,
                         )
+                    )
 
-            # Get workload controllers using this service account
-            for controller_type in ["StatefulSet", "Deployment", "DaemonSet"]:
-                try:
-                    controllers = await self.cluster_client.get_resources("apps/v1", controller_type, namespace)
-                    for controller in controllers:
-                        controller_sa = (
-                            controller.get("spec", {})
-                            .get("template", {})
-                            .get("spec", {})
-                            .get("service_account_name", "default")
-                        )
-                        if controller_sa == sa_name:
-                            controller_name = controller.get("metadata", {}).get("name", "")
-                            if controller_name:
-                                resources.append(
-                                    ResourceInfo(
-                                        name=controller_name,
-                                        namespace=namespace,
-                                        type=controller_type.lower(),
-                                        labels=controller.get("metadata", {}).get("labels", {}),
-                                        service_account=sa_name,
-                                    )
-                                )
-                except Exception:
-                    continue
-
-        except Exception:
-            pass
+        # Note: Skipping controller queries for performance
+        # Pods are the primary resources we care about for policy analysis
 
         return resources
 
