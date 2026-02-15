@@ -54,7 +54,8 @@ class K8sClient(ClusterClient):
 
         try:
             assert self._core_v1 is not None
-            response = self._core_v1.list_namespace()
+            # Run blocking K8s API call in thread pool
+            response = await asyncio.to_thread(self._core_v1.list_namespace)
             namespaces = []
 
             for ns in response.items:
@@ -127,18 +128,21 @@ class K8sClient(ClusterClient):
             if group == "" and version == "v1":
                 return await self._get_core_resources(kind, namespace)
 
-            # Get custom resources
-            if namespace:
-                assert self._custom_objects is not None
-                response = self._custom_objects.list_namespaced_custom_object(
-                    group=group, version=version, namespace=namespace, plural=self._get_plural_name(kind)
-                )
-            else:
-                assert self._custom_objects is not None
-                response = self._custom_objects.list_cluster_custom_object(
-                    group=group, version=version, plural=self._get_plural_name(kind)
+            # Get custom resources in thread pool
+            assert self._custom_objects is not None
+            custom_objects = self._custom_objects
+            plural = self._get_plural_name(kind)
+
+            def fetch() -> dict[str, Any]:
+                if namespace:
+                    return custom_objects.list_namespaced_custom_object(
+                        group=group, version=version, namespace=namespace, plural=plural
+                    )
+                return custom_objects.list_cluster_custom_object(
+                    group=group, version=version, plural=plural
                 )
 
+            response = await asyncio.to_thread(fetch)
             items = response.get("items", [])
             return items if isinstance(items, list) else []
 
@@ -151,39 +155,37 @@ class K8sClient(ClusterClient):
     async def _get_core_resources(self, kind: str, namespace: str | None = None) -> list[dict[str, Any]]:
         """Get core Kubernetes resources."""
         kind_lower = kind.lower()
+        assert self._core_v1 is not None
+        core_v1 = self._core_v1
 
-        try:
-            assert self._core_v1 is not None
+        def fetch() -> Any:
             if kind_lower == "namespace":
-                response = self._core_v1.list_namespace()
+                return core_v1.list_namespace()
             elif kind_lower == "pod":
                 if namespace:
-                    response = self._core_v1.list_namespaced_pod(namespace=namespace)
-                else:
-                    response = self._core_v1.list_pod_for_all_namespaces()
+                    return core_v1.list_namespaced_pod(namespace=namespace)
+                return core_v1.list_pod_for_all_namespaces()
             elif kind_lower == "service":
                 if namespace:
-                    response = self._core_v1.list_namespaced_service(namespace=namespace)
-                else:
-                    response = self._core_v1.list_service_for_all_namespaces()
+                    return core_v1.list_namespaced_service(namespace=namespace)
+                return core_v1.list_service_for_all_namespaces()
             elif kind_lower == "serviceaccount":
                 if namespace:
-                    response = self._core_v1.list_namespaced_service_account(namespace=namespace)
-                else:
-                    response = self._core_v1.list_service_account_for_all_namespaces()
+                    return core_v1.list_namespaced_service_account(namespace=namespace)
+                return core_v1.list_service_account_for_all_namespaces()
             elif kind_lower == "configmap":
                 if namespace:
-                    response = self._core_v1.list_namespaced_config_map(namespace=namespace)
-                else:
-                    response = self._core_v1.list_config_map_for_all_namespaces()
+                    return core_v1.list_namespaced_config_map(namespace=namespace)
+                return core_v1.list_config_map_for_all_namespaces()
             elif kind_lower == "secret":
                 if namespace:
-                    response = self._core_v1.list_namespaced_secret(namespace=namespace)
-                else:
-                    response = self._core_v1.list_secret_for_all_namespaces()
+                    return core_v1.list_namespaced_secret(namespace=namespace)
+                return core_v1.list_secret_for_all_namespaces()
             else:
                 raise ValueError(f"Unsupported core resource: {kind}")
 
+        try:
+            response = await asyncio.to_thread(fetch)
             return [item.to_dict() for item in response.items]
 
         except ApiException as e:

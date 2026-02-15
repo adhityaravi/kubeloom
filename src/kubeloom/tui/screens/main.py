@@ -13,7 +13,7 @@ from textual.app import ComposeResult
 from textual.binding import Binding
 from textual.containers import Container, Horizontal, Vertical, VerticalScroll
 from textual.screen import Screen
-from textual.widgets import DataTable, Input, Static, TabbedContent, TabPane
+from textual.widgets import DataTable, Input, LoadingIndicator, Static, TabbedContent, TabPane
 
 from kubeloom.core.interfaces import MeshAdapter
 from kubeloom.core.models import Policy, ServiceMesh
@@ -97,6 +97,7 @@ class MainScreen(Screen[None]):
                     with Horizontal(id="policies-layout"):
                         with Vertical(id="policies-list-pane"):
                             yield Input(placeholder="/filter...", id="policies-filter")
+                            yield LoadingIndicator(id="main-loading")
                             with VerticalScroll(id="policies-list-scroll"):
                                 yield Static("", id="policies-list")
                         with Vertical(id="policies-detail-pane"):
@@ -141,9 +142,6 @@ class MainScreen(Screen[None]):
         table = self.query_one("#mispicks-table", DataTable)
         self.mispicks_tab.init_table(table)
 
-        # Show loading state
-        self.query_one("#policies-list", Static).update("[dim]Loading...[/]")
-
         # Initialize in background so UI renders immediately
         self._run_background(self._initialize())
 
@@ -156,6 +154,7 @@ class MainScreen(Screen[None]):
             self.service_mesh = await self.mesh_adapter.detect()
 
             if not self.service_mesh:
+                self.query_one("#main-loading", LoadingIndicator).display = False
                 self.app.notify("No service mesh detected", severity="warning", timeout=5)
                 self._update_status_bar()
                 return
@@ -166,6 +165,10 @@ class MainScreen(Screen[None]):
 
         except Exception as e:
             self.app.notify(f"Error: {e!s}", severity="error", timeout=5)
+        finally:
+            # Hide loading indicator
+            with contextlib.suppress(Exception):
+                self.query_one("#main-loading", LoadingIndicator).display = False
 
     # ─── Data Loading ─────────────────────────────────────────────────────────
 
