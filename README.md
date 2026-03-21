@@ -144,22 +144,23 @@ The enroll/unenroll and weave/unweave features exist to quickly unblock debuggin
 
 ## Keybindings
 
-| Key | Action |
-|-----|--------|
-| `1/2/3` | Switch tabs (Policies / Resources / Mispicks) |
-| `j/k` | Navigate up/down |
-| `h/l` | Scroll detail pane |
-| `n/p` | Next/prev namespace |
-| `/` | Filter current list |
-| `r` | Refresh data |
-| `y` | Copy manifest (Policies) or error message (Mispicks) to clipboard |
-| `s` | Start tailing logs |
-| `x` | Stop tailing logs |
-| `c` | Clear collected errors |
-| `i` | Ignore errors matching selected error's type and source |
-| `I` | Clear all ignore rules |
-| `e` | Enroll pod into mesh |
-| `u` | Unenroll pod from mesh |
-| `w` | Weave policy from error |
-| `W` | Unweave all kubeloom policies |
-| `q` | Quit |
+| Key | Tab | Action |
+|-----|-----|--------|
+| `1/2/3` | All | Switch tabs (Policies / Resources / Mispicks) |
+| `j/k` | All | Navigate up/down |
+| `h/l` | All | Scroll detail pane |
+| `n/p` | All | Next/prev namespace |
+| `/` | All | Filter current list |
+| `r` | All | Refresh data |
+| `q` | All | Quit |
+| `y` | Policies | Copy manifest to clipboard |
+| `y` | Mispicks | Copy error message to clipboard |
+| `e` | Resources | Enroll pod into mesh |
+| `u` | Resources | Unenroll pod from mesh |
+| `s` | Mispicks | Start tailing logs |
+| `x` | Mispicks | Stop tailing logs |
+| `c` | Mispicks | Clear collected errors |
+| `i` | Mispicks | Ignore errors matching selected error's type and source |
+| `I` | Mispicks | Clear all ignore rules |
+| `w` | Mispicks | Weave policy from error |
+| `W` | Mispicks | Unweave all kubeloom policies |
