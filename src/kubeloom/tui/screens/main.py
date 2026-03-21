@@ -906,8 +906,12 @@ class MainScreen(Screen[None]):
         self.app.exit()
 
     def action_copy_manifest(self) -> None:
-        """Copy manifest to clipboard (only in Policies tab)."""
-        if self._get_active_tab() != TAB_POLICIES:
+        """Copy manifest or error message to clipboard."""
+        tab = self._get_active_tab()
+        if tab == TAB_MISPICKS:
+            self._copy_mispick_message()
+            return
+        if tab != TAB_POLICIES:
             return
 
         if not self._filtered_policies or self._policy_cursor >= len(self._filtered_policies):
@@ -934,6 +938,17 @@ class MainScreen(Screen[None]):
             self.app.notify("Manifest copied to clipboard", severity="information", timeout=2)
         except Exception as e:
             self.app.notify(f"Failed to copy: {e!s}", severity="error", timeout=3)
+
+    def _copy_mispick_message(self) -> None:
+        """Copy the selected mispick's raw message to clipboard."""
+        table = self.query_one("#mispicks-table", DataTable)
+        if table.cursor_row is None:
+            return
+        error = self.mispicks_tab.get_error_at_row(table.cursor_row)
+        if not error or not error.raw_message:
+            return
+        self.app.copy_to_clipboard(error.raw_message)
+        self.app.notify("Error message copied to clipboard", severity="information", timeout=2)
 
     def action_focus_filter(self) -> None:
         """Focus the filter input for current tab."""
