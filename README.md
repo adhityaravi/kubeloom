@@ -57,7 +57,7 @@ Start in the **Policies** tab. You see all AuthorizationPolicies in your cluster
 
 Switch to **Resources** tab (`2`). These are pods and services that are targeted by your policies. kubeloom pre filters these so you're not staring at every pod in the cluster.
 
-Red highlighting means the pod isn't enrolled in the mesh and won't be able to communicate with mesh enrolled workloads.
+Red highlighting means the pod isn't enrolled in the mesh or a service doesn't have a waypoint proxy configured. These workloads won't be able to communicate properly with mesh enrolled workloads.
 
 ![Resources Tab](assets/resources.png)
 
@@ -72,7 +72,9 @@ Switch to **Mispicks** tab (`3`) and press `s` to start tailing logs. kubeloom w
 | `mtls_error` | mTLS handshake failed between workloads |
 | `connection_error` | Upstream connection failed (502/503/504) |
 
-The detail pane shows the full context: source workload, target service, port, HTTP method/path if L7, and the raw log line.
+The detail pane shows the full context: source workload, target service, port, HTTP method/path if L7, and the raw log line. Press `y` to copy the raw error message to clipboard.
+
+If you're seeing noise from known sources, select the error and press `i` to ignore all errors with the same type and source workload. Press `I` to clear all ignore rules.
 
 You see a `source_not_on_mesh` error. A pod is trying to talk to a mesh service, but the mesh can't identify who's calling because the source pod isn't enrolled.
 
@@ -88,7 +90,7 @@ kubeloom adds the appropriate labels/annotations to inject the sidecar or regist
 
 ### 5. New error appears
 
-Check **Mispicks** again (`3`). The `source_not_on_mesh` errors stop. But now you see `access_denied`. The pod is on the mesh now, the mesh knows who it is, but there's no AuthorizationPolicy allowing it to talk to the target service.
+Check **Mispicks** again (`3`). The `source_not_on_mesh` errors stop. But now you see `access_denied` mixed in with other noise. Press `i` on any `connection_error` you don't care about to hide them. Now you can focus on the `access_denied`. The pod is on the mesh, the mesh knows who it is, but there's no AuthorizationPolicy allowing it to talk to the target service.
 
 ![Mispicks - Access Denied](assets/mispicks_access_denied.png)
 
@@ -150,10 +152,12 @@ The enroll/unenroll and weave/unweave features exist to quickly unblock debuggin
 | `n/p` | Next/prev namespace |
 | `/` | Filter current list |
 | `r` | Refresh data |
-| `y` | Copy manifest to clipboard |
+| `y` | Copy manifest (Policies) or error message (Mispicks) to clipboard |
 | `s` | Start tailing logs |
 | `x` | Stop tailing logs |
 | `c` | Clear collected errors |
+| `i` | Ignore errors matching selected error's type and source |
+| `I` | Clear all ignore rules |
 | `e` | Enroll pod into mesh |
 | `u` | Unenroll pod from mesh |
 | `w` | Weave policy from error |
