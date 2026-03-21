@@ -43,16 +43,6 @@ class HTTPMethod(Enum):
     # Wildcard
     ALL = "*"  # Match all methods
 
-    @classmethod
-    def read_methods(cls) -> set["HTTPMethod"]:
-        """Returns read-only HTTP methods."""
-        return {cls.GET, cls.HEAD, cls.OPTIONS}
-
-    @classmethod
-    def write_methods(cls) -> set["HTTPMethod"]:
-        """Returns methods that modify resources."""
-        return {cls.POST, cls.PUT, cls.DELETE, cls.PATCH}
-
 
 @dataclass
 class AllowedRoute:
@@ -65,14 +55,9 @@ class AllowedRoute:
     # Protocol-specific fields
     hosts: list[str] = field(default_factory=list)  # DNS names: api.example.com, *.internal
     headers: dict[str, str] = field(default_factory=dict)  # Required headers
-    query_params: dict[str, str] = field(default_factory=dict)
-    protocol: Literal["HTTP", "HTTPS", "GRPC", "HTTP2", "TCP", "UDP", "TLS"] | None = None
-
     # Special route flags
     allow_all: bool = False
-    allow_nothing: bool = False  # Priority difference between deny all and allow nothing.
     deny_all: bool = False
-    deny_nothing: bool = False  # does this exist?
 
 
 @dataclass
@@ -138,9 +123,6 @@ class PolicyAction:
 
     # Audit/logging configuration
     log_level: Literal["DEBUG", "INFO", "WARN", "ERROR", "NONE"] = "INFO"
-    log_additional_headers: list[str] = field(default_factory=list)
-    log_request_body: bool = False
-    log_response_body: bool = False
 
     def is_blocking(self) -> bool:
         """Check if this action blocks traffic."""

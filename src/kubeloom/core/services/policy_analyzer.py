@@ -264,44 +264,6 @@ class PolicyAnalyzer:
 
         return resources
 
-    async def _get_resources_by_labels(self, labels: dict[str, str], namespace: str) -> list[ResourceInfo]:
-        """Get resources that match the given labels."""
-        resources = []
-
-        # Use cache if available
-        if namespace not in self._pods_cache:
-            await self._prefetch_namespace_resources(namespace)
-
-        for pod in self._pods_cache.get(namespace, []):
-            pod_labels = pod.get("metadata", {}).get("labels", {})
-            if self._labels_match(labels, pod_labels):
-                pod_name = pod.get("metadata", {}).get("name", "")
-                if pod_name:
-                    sa_name = pod.get("spec", {}).get("service_account_name")
-                    if not sa_name:
-                        sa_name = pod.get("spec", {}).get("service_account", "default")
-
-                    resources.append(
-                        ResourceInfo(
-                            name=pod_name,
-                            namespace=namespace,
-                            type="pod",
-                            labels=pod_labels,
-                            service_account=sa_name,
-                        )
-                    )
-
-        for service in self._services_cache.get(namespace, []):
-            service_labels = service.get("metadata", {}).get("labels", {})
-            if self._labels_match(labels, service_labels):
-                service_name = service.get("metadata", {}).get("name", "")
-                if service_name:
-                    resources.append(
-                        ResourceInfo(name=service_name, namespace=namespace, type="service", labels=service_labels)
-                    )
-
-        return resources
-
     async def _get_resources_by_service_account(self, sa_name: str, namespace: str) -> list[ResourceInfo]:
         """Get all resources using a specific service account."""
         resources = []

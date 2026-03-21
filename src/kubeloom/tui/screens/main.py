@@ -50,6 +50,8 @@ class MainScreen(Screen[None]):
         Binding("c", "clear_mispicks", "Clear Errors", show=False),
         Binding("e", "enroll_pod", "Enroll Pod", show=False),
         Binding("u", "unenroll_pod", "Unenroll Pod", show=False),
+        Binding("i", "ignore_error", "Ignore Error", show=False),
+        Binding("I", "clear_ignores", "Clear Ignores", show=False),
         Binding("w", "weave_policy", "Weave Policy", show=False),
         Binding("W", "unweave_policies", "Unweave All", show=False),
         Binding("y", "copy_manifest", "Copy Manifest", show=False),
@@ -84,8 +86,9 @@ class MainScreen(Screen[None]):
         self._filtered_policies: list[Policy] = []
         self._filtered_resources: list[ResourceInfo] = []
 
-        # Cache for namespace policy counts (avoids redundant API calls)
+        # Cache for namespace policy/resource counts (avoids redundant API calls)
         self._namespace_policy_counts: dict[str, int] = {}
+        self._namespace_resource_counts: dict[str, int] = {}
 
         # Cache for pod enrollment status
         self._enrollment_cache: dict[str, bool] = {}
@@ -185,22 +188,28 @@ class MainScreen(Screen[None]):
             self.namespaces = namespaces
             self.namespaces_with_policies = []
             self._namespace_policy_counts = {}
+            self._namespace_resource_counts = {}
 
-            # Fetch AuthorizationPolicies for all namespaces in parallel
+            # Fetch AuthorizationPolicies and resource counts for all namespaces in parallel
             mesh_adapter = self.mesh_adapter
 
-            async def get_ns_policies(ns_name: str) -> tuple[str, int]:
+            async def get_ns_counts(ns_name: str) -> tuple[str, int, int]:
                 policies = await mesh_adapter.get_authorization_policies(ns_name)
-                return (ns_name, len(policies))
+                resource_count = 0
+                if policies and self.policy_analyzer:
+                    resources = await self.policy_analyzer.get_all_affected_resources(policies)
+                    resource_count = len(resources)
+                return (ns_name, len(policies), resource_count)
 
-            results = await asyncio.gather(*[get_ns_policies(ns.name) for ns in namespaces], return_exceptions=True)
+            results = await asyncio.gather(*[get_ns_counts(ns.name) for ns in namespaces], return_exceptions=True)
 
             for result in results:
                 if isinstance(result, tuple):
-                    ns_name, count = result
-                    if count > 0:
+                    ns_name, policy_count, resource_count = result
+                    if policy_count > 0:
                         self.namespaces_with_policies.append(ns_name)
-                        self._namespace_policy_counts[ns_name] = count
+                        self._namespace_policy_counts[ns_name] = policy_count
+                        self._namespace_resource_counts[ns_name] = resource_count
 
             if self.namespace_selector:
                 self.namespace_selector.set_namespaces(self.namespaces_with_policies)
@@ -258,23 +267,31 @@ class MainScreen(Screen[None]):
         if not self.mesh_adapter or not self.k8s_client or not current_namespace:
             return
 
-        # Get all pods in namespace once
+        # Get all pods and services in namespace once
         pods_by_name: dict[str, dict] = {}
+        services_by_name: dict[str, dict] = {}
         try:
             pods = await self.k8s_client.get_resources("v1", "Pod", current_namespace.name)
             pods_by_name = {p.get("metadata", {}).get("name"): p for p in pods}
+            services = await self.k8s_client.get_resources("v1", "Service", current_namespace.name)
+            services_by_name = {s.get("metadata", {}).get("name"): s for s in services}
         except Exception:
             return
 
-        # Check enrollment for each pod resource
+        # Check enrollment for each resource
         for resource in self.resources:
-            if resource.type != "pod":
-                self._enrollment_cache[resource.name] = True
-                continue
-
-            pod = pods_by_name.get(resource.name)
-            if pod:
-                self._enrollment_cache[resource.name] = self.mesh_adapter.is_pod_enrolled(pod, current_namespace)
+            if resource.type == "pod":
+                pod = pods_by_name.get(resource.name)
+                if pod:
+                    self._enrollment_cache[resource.name] = self.mesh_adapter.is_pod_enrolled(pod, current_namespace)
+                else:
+                    self._enrollment_cache[resource.name] = True
+            elif resource.type == "service":
+                svc = services_by_name.get(resource.name)
+                if svc:
+                    self._enrollment_cache[resource.name] = self.mesh_adapter.is_service_waypoint_enrolled(svc)
+                else:
+                    self._enrollment_cache[resource.name] = True
             else:
                 self._enrollment_cache[resource.name] = True
 
@@ -363,18 +380,20 @@ class MainScreen(Screen[None]):
         self.mispicks_tab.update_table(table, self._mispicks_filter)
 
     def _update_namespace_tree(self) -> None:
-        """Update the namespace list with namespaces that have policies."""
+        """Update the namespace list with counts matching the active tab."""
         current_ns = self.namespace_selector.get_current_namespace() if self.namespace_selector else None
+        active_tab = self._get_active_tab()
+
+        counts = self._namespace_resource_counts if active_tab == TAB_RESOURCES else self._namespace_policy_counts
 
         tree = RichTree("[bold]All[/bold]", guide_style=Colors.SURFACE.value)
         for namespace in self.namespaces_with_policies:
-            # Use cached count instead of making API calls
-            policy_count = self._namespace_policy_counts.get(namespace, 0)
+            count = counts.get(namespace, 0)
 
             if namespace == current_ns:
-                label = f"[bold {Colors.CYAN.value}]{namespace}[/] ({policy_count})"
+                label = f"[bold {Colors.CYAN.value}]{namespace}[/] ({count})"
             else:
-                label = f"{namespace} ({policy_count})"
+                label = f"{namespace} ({count})"
             tree.add(label)
 
         # Update both namespace lists
@@ -461,9 +480,12 @@ class MainScreen(Screen[None]):
 {self._label("Status")} {policy.status.value}
 {self._label("Action")} {action_str}
 
-{self._label("Source")} {source_str}
-{self._label("Targets")} {target_str}
-{self._label("Routes")} {routes_str}
+{self._label("Source")}
+{source_str}
+{self._label("Targets")}
+{target_str}
+{self._label("Routes")}
+{routes_str}
 
 {self._label("Labels")}
 {labels_str}
@@ -522,51 +544,92 @@ class MainScreen(Screen[None]):
         return f"[{color}]{action_type}[/{color}]"
 
     def _format_source(self, source: Any) -> str:
-        """Format policy source for display."""
+        """Format policy source as tiered list."""
         if not source or source.is_empty():
-            return "All sources"
-        parts = []
-        if source.service_accounts:
-            parts.append(f"SAs: {', '.join(source.service_accounts)}")
+            return "  All sources"
+        lines = []
         if source.namespaces:
-            parts.append(f"NS: {', '.join(source.namespaces)}")
+            lines.append("  Namespaces:")
+            lines.extend(f"    {ns}" for ns in source.namespaces)
+        if source.principals:
+            lines.append("  Principals:")
+            lines.extend(f"    {p}" for p in source.principals)
+        elif source.service_accounts:
+            lines.append("  Service Accounts:")
+            lines.extend(f"    {sa}" for sa in source.service_accounts)
+        if source.ip_blocks:
+            lines.append("  IP Blocks:")
+            lines.extend(f"    {ip}" for ip in source.ip_blocks)
         if source.workload_labels:
-            labels = [f"{k}={v}" for k, v in source.workload_labels.items()]
-            parts.append(f"Labels: {', '.join(labels)}")
-        return " | ".join(parts) if parts else "All sources"
+            lines.append("  Workload Labels:")
+            lines.extend(f"    {k}={v}" for k, v in source.workload_labels.items())
+        return "\n".join(lines)
 
     def _format_targets(self, targets: list[Any]) -> str:
-        """Format policy targets for display."""
+        """Format policy targets as tiered list."""
         if not targets:
-            return "All workloads"
-        parts = []
-        for target in targets:
+            return "  All workloads"
+        lines = []
+        for i, target in enumerate(targets):
+            if len(targets) > 1:
+                lines.append(f"  Target {i + 1}:")
+                indent = "    "
+            else:
+                indent = "  "
             if target.services:
-                parts.extend(target.services)
+                lines.append(f"{indent}Services:")
+                lines.extend(f"{indent}  {svc}" for svc in target.services)
+            if target.pods:
+                lines.append(f"{indent}Pods:")
+                lines.extend(f"{indent}  {pod}" for pod in target.pods)
+            if target.deployments:
+                lines.append(f"{indent}Deployments:")
+                lines.extend(f"{indent}  {d}" for d in target.deployments)
+            if target.statefulsets:
+                lines.append(f"{indent}StatefulSets:")
+                lines.extend(f"{indent}  {ss}" for ss in target.statefulsets)
+            if target.daemonsets:
+                lines.append(f"{indent}DaemonSets:")
+                lines.extend(f"{indent}  {ds}" for ds in target.daemonsets)
+            if target.hosts:
+                lines.append(f"{indent}Hosts:")
+                lines.extend(f"{indent}  {h}" for h in target.hosts)
+            if target.ports:
+                lines.append(f"{indent}Ports:")
+                lines.extend(f"{indent}  {p}" for p in target.ports)
             if target.workload_labels:
-                labels = [f"{k}={v}" for k, v in target.workload_labels.items()]
-                parts.append(f"Labels: {', '.join(labels)}")
-        return ", ".join(parts) if parts else "All workloads"
+                lines.append(f"{indent}Workload Labels:")
+                lines.extend(f"{indent}  {k}={v}" for k, v in target.workload_labels.items())
+            if target.is_empty():
+                lines.append(f"{indent}All workloads")
+        return "\n".join(lines)
 
     def _format_routes(self, routes: list[Any]) -> str:
-        """Format policy routes for display."""
+        """Format policy routes as tiered list."""
         if not routes:
-            return "All routes"
-        parts = []
+            return "  All routes"
+        lines = []
         for route in routes:
             if route.deny_all:
-                return f"[{Colors.RED.value}]No routes allowed[/]"
+                return f"  [{Colors.RED.value}]No routes allowed[/]"
             if route.allow_all:
-                return "All routes"
-            if route.ports and route.paths:
-                for port in route.ports:
-                    for path in route.paths:
-                        parts.append(f":{port}{path}")
-            elif route.ports:
-                parts.extend(f":{port}/*" for port in route.ports)
-            elif route.paths:
-                parts.extend(f":*{path}" for path in route.paths)
-        return ", ".join(parts) if parts else "All routes"
+                return "  All routes"
+            if route.methods:
+                lines.append("  Methods:")
+                lines.extend(f"    {m.value}" for m in route.methods)
+            if route.paths:
+                lines.append("  Paths:")
+                lines.extend(f"    {p}" for p in route.paths)
+            if route.ports:
+                lines.append("  Ports:")
+                lines.extend(f"    {p}" for p in route.ports)
+            if route.hosts:
+                lines.append("  Hosts:")
+                lines.extend(f"    {h}" for h in route.hosts)
+            if route.headers:
+                lines.append("  Headers:")
+                lines.extend(f"    {k}: {v}" for k, v in route.headers.items())
+        return "\n".join(lines) if lines else "  All routes"
 
     def _format_labels(self, labels: dict[str, str] | None) -> str:
         """Format labels for display."""
@@ -629,15 +692,31 @@ class MainScreen(Screen[None]):
         scroll_id = f"#{self._get_active_tab()}-detail-scroll"
         self.query_one(scroll_id, VerticalScroll).scroll_down()
 
+    def _scroll_list_to_cursor(self, scroll_id: str, cursor: int, total: int) -> None:
+        """Scroll a list pane to keep the cursor visible."""
+        try:
+            scroll = self.query_one(f"#{scroll_id}", VerticalScroll)
+            if total <= 0:
+                return
+            line_height = scroll.virtual_size.height / total
+            target_y = cursor * line_height
+            visible_height = scroll.size.height
+            # Scroll so cursor is roughly centered
+            scroll.scroll_to(y=target_y - visible_height / 2, animate=False)
+        except Exception:
+            pass
+
     def action_cursor_up(self) -> None:
         """Move cursor up in list/table."""
         tab = self._get_active_tab()
         if tab == TAB_POLICIES and self._policy_cursor > 0:
             self._policy_cursor -= 1
             self._render_policies_list()
+            self._scroll_list_to_cursor("policies-list-scroll", self._policy_cursor, len(self._filtered_policies))
         elif tab == TAB_RESOURCES and self._resource_cursor > 0:
             self._resource_cursor -= 1
             self._render_resources_list()
+            self._scroll_list_to_cursor("resources-list-scroll", self._resource_cursor, len(self._filtered_resources))
         elif tab == TAB_MISPICKS:
             self.query_one("#mispicks-table", DataTable).action_cursor_up()
         self._update_current_detail()
@@ -648,9 +727,11 @@ class MainScreen(Screen[None]):
         if tab == TAB_POLICIES and self._policy_cursor < len(self._filtered_policies) - 1:
             self._policy_cursor += 1
             self._render_policies_list()
+            self._scroll_list_to_cursor("policies-list-scroll", self._policy_cursor, len(self._filtered_policies))
         elif tab == TAB_RESOURCES and self._resource_cursor < len(self._filtered_resources) - 1:
             self._resource_cursor += 1
             self._render_resources_list()
+            self._scroll_list_to_cursor("resources-list-scroll", self._resource_cursor, len(self._filtered_resources))
         elif tab == TAB_MISPICKS:
             self.query_one("#mispicks-table", DataTable).action_cursor_down()
         self._update_current_detail()
@@ -660,6 +741,7 @@ class MainScreen(Screen[None]):
         self.query_one("#main-tabs", TabbedContent).active = tab_id
         if self.status_bar:
             self.status_bar.set_active_tab(tab_id)
+        self._update_namespace_tree()
         self._update_current_detail()
 
     def action_tab_policies(self) -> None:
@@ -698,6 +780,28 @@ class MainScreen(Screen[None]):
         if self._get_active_tab() == TAB_MISPICKS:
             self.mispicks_tab.clear_errors()
             self._update_mispicks_table()
+
+    def action_ignore_error(self) -> None:
+        """Ignore errors matching the selected error's type+source."""
+        if self._get_active_tab() != TAB_MISPICKS:
+            return
+        table = self.query_one("#mispicks-table", DataTable)
+        if table.cursor_row is None:
+            return
+        error = self.mispicks_tab.get_error_at_row(table.cursor_row)
+        if not error:
+            return
+        desc = self.mispicks_tab.ignore_error(error)
+        self._update_mispicks_table()
+        self.app.notify(f"Ignoring {desc}", severity="information", timeout=2)
+
+    def action_clear_ignores(self) -> None:
+        """Clear all ignore rules."""
+        if self._get_active_tab() != TAB_MISPICKS:
+            return
+        self.mispicks_tab.clear_ignores()
+        self._update_mispicks_table()
+        self.app.notify("Ignores cleared", severity="information", timeout=2)
 
     async def action_enroll_pod(self) -> None:
         """Enroll selected pod in mesh (only in Resources tab)."""
@@ -826,15 +930,31 @@ class MainScreen(Screen[None]):
         self.app.exit()
 
     def action_copy_manifest(self) -> None:
-        """Copy manifest to clipboard (only in Policies tab)."""
-        if self._get_active_tab() != TAB_POLICIES:
+        """Copy manifest or error message to clipboard."""
+        tab = self._get_active_tab()
+        if tab == TAB_MISPICKS:
+            self._copy_mispick_message()
+            return
+        if tab != TAB_POLICIES:
             return
 
         if not self._filtered_policies or self._policy_cursor >= len(self._filtered_policies):
             return
 
         policy = self._filtered_policies[self._policy_cursor]
-        manifest = policy.raw_manifest or policy.spec
+        raw = policy.raw_manifest
+        if raw:
+            metadata = {
+                k: v for k, v in raw.get("metadata", {}).items() if k in ("name", "namespace", "labels", "annotations")
+            }
+            manifest = {
+                "apiVersion": raw.get("apiVersion"),
+                "kind": raw.get("kind"),
+                "metadata": metadata,
+                "spec": raw.get("spec", {}),
+            }
+        else:
+            manifest = policy.spec
 
         try:
             manifest_yaml = yaml.dump(manifest, default_flow_style=False, indent=2, sort_keys=False)
@@ -842,6 +962,17 @@ class MainScreen(Screen[None]):
             self.app.notify("Manifest copied to clipboard", severity="information", timeout=2)
         except Exception as e:
             self.app.notify(f"Failed to copy: {e!s}", severity="error", timeout=3)
+
+    def _copy_mispick_message(self) -> None:
+        """Copy the selected mispick's raw message to clipboard."""
+        table = self.query_one("#mispicks-table", DataTable)
+        if table.cursor_row is None:
+            return
+        error = self.mispicks_tab.get_error_at_row(table.cursor_row)
+        if not error or not error.raw_message:
+            return
+        self.app.copy_to_clipboard(error.raw_message)
+        self.app.notify("Error message copied to clipboard", severity="information", timeout=2)
 
     def action_focus_filter(self) -> None:
         """Focus the filter input for current tab."""
@@ -873,6 +1004,7 @@ class MainScreen(Screen[None]):
         """Handle tab activation."""
         if self.status_bar:
             self.status_bar.set_active_tab(event.pane.id or TAB_POLICIES)
+        self._update_namespace_tree()
         self._update_current_detail()
 
     def on_data_table_row_highlighted(self, event: DataTable.RowHighlighted) -> None:

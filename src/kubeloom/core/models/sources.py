@@ -14,16 +14,9 @@ class PolicySource:
 
     # Network sources
     ip_blocks: list[str] = field(default_factory=list)  # CIDR notation: 192.168.1.0/24
-    not_ip_blocks: list[str] = field(default_factory=list)  # Exclude these CIDRs
 
     # Service mesh identity
     principals: list[str] = field(default_factory=list)  # cluster.local/ns/default/sa/my-sa
-    not_principals: list[str] = field(default_factory=list)
-
-    # JWT/OAuth sources
-    jwt_issuers: list[str] = field(default_factory=list)
-    request_principals: list[str] = field(default_factory=list)  # Authenticated user principals
-    audiences: list[str] = field(default_factory=list)
 
     def is_empty(self) -> bool:
         """Check if no source is specified (matches all sources)."""
@@ -34,15 +27,8 @@ class PolicySource:
                 self.workload_labels,
                 self.ip_blocks,
                 self.principals,
-                self.jwt_issuers,
-                self.request_principals,
-                self.audiences,
             ]
         )
-
-    def has_exclusions(self) -> bool:
-        """Check if this source has exclusion rules."""
-        return bool(self.not_ip_blocks or self.not_principals)
 
 
 @dataclass
@@ -62,7 +48,6 @@ class PolicyTarget:
 
     # Network targets
     hosts: list[str] = field(default_factory=list)  # Service DNS names
-    not_hosts: list[str] = field(default_factory=list)  # Exclude these hosts
 
     # Port-specific targeting
     ports: list[int] = field(default_factory=list)  # Target specific ports only

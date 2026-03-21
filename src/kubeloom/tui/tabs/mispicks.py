@@ -22,6 +22,7 @@ class MispicksTab:
         self.log_tailer_task: asyncio.Task[None] | None = None
         self._status_callback: Callable[[bool, str], None] | None = None
         self._filtered_errors: list[AccessError] = []  # Current filtered view
+        self._ignore_keys: set[tuple[str, str | None]] = set()  # (error_type, source_workload)
 
     def init_table(self, table: DataTable[Any]) -> None:
         """Initialize the mispicks table columns."""
@@ -37,12 +38,14 @@ class MispicksTab:
         # Reverse to show most recent first
         sorted_errors = list(reversed(self.access_errors))
 
-        # Apply filter
+        # Filter out ignored errors, then apply text filter
+        visible = [e for e in sorted_errors if not self._is_ignored(e)]
+
         if filter_text:
             filter_lower = filter_text.lower()
             self._filtered_errors = [
                 e
-                for e in sorted_errors
+                for e in visible
                 if (
                     filter_lower in (e.pod_name or "").lower()
                     or filter_lower in (e.pod_namespace or "").lower()
@@ -51,7 +54,7 @@ class MispicksTab:
                 )
             ]
         else:
-            self._filtered_errors = sorted_errors
+            self._filtered_errors = visible
 
         for error in self._filtered_errors:
             # Format timestamp (already in local timezone from K8s logs)
@@ -112,10 +115,26 @@ class MispicksTab:
         if self._status_callback:
             self._status_callback(False, "Stopped")
 
+    def ignore_error(self, error: AccessError) -> str:
+        """Add error type+source to ignore set. Returns description of what was ignored."""
+        key = (error.error_type.value, error.source_workload)
+        self._ignore_keys.add(key)
+        source = error.source_workload or "unknown"
+        return f"{error.error_type.value} from {source}"
+
+    def clear_ignores(self) -> None:
+        """Clear all ignore rules."""
+        self._ignore_keys.clear()
+
+    def _is_ignored(self, error: AccessError) -> bool:
+        """Check if an error matches any ignore rule."""
+        return (error.error_type.value, error.source_workload) in self._ignore_keys
+
     def clear_errors(self) -> None:
-        """Clear all collected errors."""
+        """Clear all collected errors and ignores."""
         self.access_errors.clear()
         self.access_error_hashes.clear()
+        self._ignore_keys.clear()
 
     async def _tail_logs_worker(
         self,

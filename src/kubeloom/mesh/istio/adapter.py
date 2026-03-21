@@ -294,6 +294,11 @@ class IstioAdapter(MeshAdapter):
         containers = pod.get("spec", {}).get("containers", [])
         return any(container.get("name") == "istio-proxy" for container in containers)
 
+    def is_service_waypoint_enrolled(self, service: dict[str, Any]) -> bool:
+        """Check if a service has a waypoint proxy configured via istio.io/use-waypoint label."""
+        labels = service.get("metadata", {}).get("labels", {})
+        return "istio.io/use-waypoint" in labels
+
     async def enroll_pod(self, pod_name: str, namespace: str) -> bool:
         """
         Enroll a specific pod in Istio Ambient mesh by labeling it.
