@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "kubeloom"
-version = "0.1.0"
+dynamic = ["version"]
 description = "Service mesh policy discovery and management for Kubernetes"
 readme = "README.md"
 license = {text = "Apache-2.0"}
@@ -44,6 +44,8 @@ dev = [
     "ruff>=0.1.9",
     "black>=23.12.1",
     "pre-commit>=3.6.0",
+    "tox>=4.0",
+    "tox-uv>=1.0",
 ]
 test = [
     "pytest>=7.4.3",
@@ -64,6 +66,9 @@ kubeloom = "kubeloom.cli:cli"
 Homepage = "https://github.com/adhityaravi/kubeloom"
 Repository = "https://github.com/adhityaravi/kubeloom"
 Issues = "https://github.com/adhityaravi/kubeloom/issues"
+
+[tool.hatch.version]
+path = "src/kubeloom/_version.py"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/kubeloom"]
