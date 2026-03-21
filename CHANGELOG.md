@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.0.2](https://github.com/adhityaravi/kubeloom/compare/kubeloom-v0.0.1...kubeloom-v0.0.2) (2026-03-21)
+
+
+### Features
+
+* ui enhancements ([#30](https://github.com/adhityaravi/kubeloom/issues/30)) ([7497221](https://github.com/adhityaravi/kubeloom/commit/7497221f40a8ebf457c418b177ff8a9b51009899))
+
 ## [0.0.1](https://github.com/adhityaravi/kubeloom/compare/kubeloom-v0.0.1...kubeloom-v0.0.1) (2026-03-21)
 
 
