@@ -6,6 +6,8 @@ from typing import ClassVar
 from textual.containers import Horizontal
 from textual.widgets import Static
 
+from kubeloom._version import __version__
+
 
 class StatusBar(Horizontal):
     """Bottom status bar with key bindings and status info."""
@@ -72,6 +74,8 @@ class StatusBar(Horizontal):
                 parts.append(self._mesh_info)
             if self._namespace_count > 0:
                 parts.append(f"{self._namespace_count} ns")
+
+            parts.append(f"kubeloom v{__version__}")
 
             info_widget.update(" . ".join(parts))
         except Exception:
