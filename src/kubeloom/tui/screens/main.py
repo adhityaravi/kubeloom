@@ -84,8 +84,9 @@ class MainScreen(Screen[None]):
         self._filtered_policies: list[Policy] = []
         self._filtered_resources: list[ResourceInfo] = []
 
-        # Cache for namespace policy counts (avoids redundant API calls)
+        # Cache for namespace policy/resource counts (avoids redundant API calls)
         self._namespace_policy_counts: dict[str, int] = {}
+        self._namespace_resource_counts: dict[str, int] = {}
 
         # Cache for pod enrollment status
         self._enrollment_cache: dict[str, bool] = {}
@@ -185,22 +186,28 @@ class MainScreen(Screen[None]):
             self.namespaces = namespaces
             self.namespaces_with_policies = []
             self._namespace_policy_counts = {}
+            self._namespace_resource_counts = {}
 
-            # Fetch AuthorizationPolicies for all namespaces in parallel
+            # Fetch AuthorizationPolicies and resource counts for all namespaces in parallel
             mesh_adapter = self.mesh_adapter
 
-            async def get_ns_policies(ns_name: str) -> tuple[str, int]:
+            async def get_ns_counts(ns_name: str) -> tuple[str, int, int]:
                 policies = await mesh_adapter.get_authorization_policies(ns_name)
-                return (ns_name, len(policies))
+                resource_count = 0
+                if policies and self.policy_analyzer:
+                    resources = await self.policy_analyzer.get_all_affected_resources(policies)
+                    resource_count = len(resources)
+                return (ns_name, len(policies), resource_count)
 
-            results = await asyncio.gather(*[get_ns_policies(ns.name) for ns in namespaces], return_exceptions=True)
+            results = await asyncio.gather(*[get_ns_counts(ns.name) for ns in namespaces], return_exceptions=True)
 
             for result in results:
                 if isinstance(result, tuple):
-                    ns_name, count = result
-                    if count > 0:
+                    ns_name, policy_count, resource_count = result
+                    if policy_count > 0:
                         self.namespaces_with_policies.append(ns_name)
-                        self._namespace_policy_counts[ns_name] = count
+                        self._namespace_policy_counts[ns_name] = policy_count
+                        self._namespace_resource_counts[ns_name] = resource_count
 
             if self.namespace_selector:
                 self.namespace_selector.set_namespaces(self.namespaces_with_policies)
@@ -363,18 +370,20 @@ class MainScreen(Screen[None]):
         self.mispicks_tab.update_table(table, self._mispicks_filter)
 
     def _update_namespace_tree(self) -> None:
-        """Update the namespace list with namespaces that have policies."""
+        """Update the namespace list with counts matching the active tab."""
         current_ns = self.namespace_selector.get_current_namespace() if self.namespace_selector else None
+        active_tab = self._get_active_tab()
+
+        counts = self._namespace_resource_counts if active_tab == TAB_RESOURCES else self._namespace_policy_counts
 
         tree = RichTree("[bold]All[/bold]", guide_style=Colors.SURFACE.value)
         for namespace in self.namespaces_with_policies:
-            # Use cached count instead of making API calls
-            policy_count = self._namespace_policy_counts.get(namespace, 0)
+            count = counts.get(namespace, 0)
 
             if namespace == current_ns:
-                label = f"[bold {Colors.CYAN.value}]{namespace}[/] ({policy_count})"
+                label = f"[bold {Colors.CYAN.value}]{namespace}[/] ({count})"
             else:
-                label = f"{namespace} ({policy_count})"
+                label = f"{namespace} ({count})"
             tree.add(label)
 
         # Update both namespace lists
@@ -660,6 +669,7 @@ class MainScreen(Screen[None]):
         self.query_one("#main-tabs", TabbedContent).active = tab_id
         if self.status_bar:
             self.status_bar.set_active_tab(tab_id)
+        self._update_namespace_tree()
         self._update_current_detail()
 
     def action_tab_policies(self) -> None:
@@ -873,6 +883,7 @@ class MainScreen(Screen[None]):
         """Handle tab activation."""
         if self.status_bar:
             self.status_bar.set_active_tab(event.pane.id or TAB_POLICIES)
+        self._update_namespace_tree()
         self._update_current_detail()
 
     def on_data_table_row_highlighted(self, event: DataTable.RowHighlighted) -> None:
