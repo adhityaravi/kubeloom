@@ -470,9 +470,12 @@ class MainScreen(Screen[None]):
 {self._label("Status")} {policy.status.value}
 {self._label("Action")} {action_str}
 
-{self._label("Source")} {source_str}
-{self._label("Targets")} {target_str}
-{self._label("Routes")} {routes_str}
+{self._label("Source")}
+{source_str}
+{self._label("Targets")}
+{target_str}
+{self._label("Routes")}
+{routes_str}
 
 {self._label("Labels")}
 {labels_str}
@@ -531,51 +534,92 @@ class MainScreen(Screen[None]):
         return f"[{color}]{action_type}[/{color}]"
 
     def _format_source(self, source: Any) -> str:
-        """Format policy source for display."""
+        """Format policy source as tiered list."""
         if not source or source.is_empty():
-            return "All sources"
-        parts = []
-        if source.service_accounts:
-            parts.append(f"SAs: {', '.join(source.service_accounts)}")
+            return "  All sources"
+        lines = []
         if source.namespaces:
-            parts.append(f"NS: {', '.join(source.namespaces)}")
+            lines.append("  Namespaces:")
+            lines.extend(f"    {ns}" for ns in source.namespaces)
+        if source.principals:
+            lines.append("  Principals:")
+            lines.extend(f"    {p}" for p in source.principals)
+        elif source.service_accounts:
+            lines.append("  Service Accounts:")
+            lines.extend(f"    {sa}" for sa in source.service_accounts)
+        if source.ip_blocks:
+            lines.append("  IP Blocks:")
+            lines.extend(f"    {ip}" for ip in source.ip_blocks)
         if source.workload_labels:
-            labels = [f"{k}={v}" for k, v in source.workload_labels.items()]
-            parts.append(f"Labels: {', '.join(labels)}")
-        return " | ".join(parts) if parts else "All sources"
+            lines.append("  Workload Labels:")
+            lines.extend(f"    {k}={v}" for k, v in source.workload_labels.items())
+        return "\n".join(lines)
 
     def _format_targets(self, targets: list[Any]) -> str:
-        """Format policy targets for display."""
+        """Format policy targets as tiered list."""
         if not targets:
-            return "All workloads"
-        parts = []
-        for target in targets:
+            return "  All workloads"
+        lines = []
+        for i, target in enumerate(targets):
+            if len(targets) > 1:
+                lines.append(f"  Target {i + 1}:")
+                indent = "    "
+            else:
+                indent = "  "
             if target.services:
-                parts.extend(target.services)
+                lines.append(f"{indent}Services:")
+                lines.extend(f"{indent}  {svc}" for svc in target.services)
+            if target.pods:
+                lines.append(f"{indent}Pods:")
+                lines.extend(f"{indent}  {pod}" for pod in target.pods)
+            if target.deployments:
+                lines.append(f"{indent}Deployments:")
+                lines.extend(f"{indent}  {d}" for d in target.deployments)
+            if target.statefulsets:
+                lines.append(f"{indent}StatefulSets:")
+                lines.extend(f"{indent}  {ss}" for ss in target.statefulsets)
+            if target.daemonsets:
+                lines.append(f"{indent}DaemonSets:")
+                lines.extend(f"{indent}  {ds}" for ds in target.daemonsets)
+            if target.hosts:
+                lines.append(f"{indent}Hosts:")
+                lines.extend(f"{indent}  {h}" for h in target.hosts)
+            if target.ports:
+                lines.append(f"{indent}Ports:")
+                lines.extend(f"{indent}  {p}" for p in target.ports)
             if target.workload_labels:
-                labels = [f"{k}={v}" for k, v in target.workload_labels.items()]
-                parts.append(f"Labels: {', '.join(labels)}")
-        return ", ".join(parts) if parts else "All workloads"
+                lines.append(f"{indent}Workload Labels:")
+                lines.extend(f"{indent}  {k}={v}" for k, v in target.workload_labels.items())
+            if target.is_empty():
+                lines.append(f"{indent}All workloads")
+        return "\n".join(lines)
 
     def _format_routes(self, routes: list[Any]) -> str:
-        """Format policy routes for display."""
+        """Format policy routes as tiered list."""
         if not routes:
-            return "All routes"
-        parts = []
+            return "  All routes"
+        lines = []
         for route in routes:
             if route.deny_all:
-                return f"[{Colors.RED.value}]No routes allowed[/]"
+                return f"  [{Colors.RED.value}]No routes allowed[/]"
             if route.allow_all:
-                return "All routes"
-            if route.ports and route.paths:
-                for port in route.ports:
-                    for path in route.paths:
-                        parts.append(f":{port}{path}")
-            elif route.ports:
-                parts.extend(f":{port}/*" for port in route.ports)
-            elif route.paths:
-                parts.extend(f":*{path}" for path in route.paths)
-        return ", ".join(parts) if parts else "All routes"
+                return "  All routes"
+            if route.methods:
+                lines.append("  Methods:")
+                lines.extend(f"    {m.value}" for m in route.methods)
+            if route.paths:
+                lines.append("  Paths:")
+                lines.extend(f"    {p}" for p in route.paths)
+            if route.ports:
+                lines.append("  Ports:")
+                lines.extend(f"    {p}" for p in route.ports)
+            if route.hosts:
+                lines.append("  Hosts:")
+                lines.extend(f"    {h}" for h in route.hosts)
+            if route.headers:
+                lines.append("  Headers:")
+                lines.extend(f"    {k}: {v}" for k, v in route.headers.items())
+        return "\n".join(lines) if lines else "  All routes"
 
     def _format_labels(self, labels: dict[str, str] | None) -> str:
         """Format labels for display."""
