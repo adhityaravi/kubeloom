@@ -4,15 +4,25 @@
 
 ## Installation
 
-No need to install kubeloom. Run it directly with `uvx`:
+### From PyPI
 
 ```bash
-uvx --python 3.12 --from git+https://github.com/adhityaravi/kubeloom kubeloom tui
+pip install kubeloom
 ```
 
-> **Note:** Python 3.12 required. Python 3.14 has stricter SSL certificate validation that may cause issues with some Kubernetes clusters.
+### Run without installing
 
-PyPI package coming soon for persistant installation.
+```bash
+uvx kubeloom tui
+```
+
+### Run from source
+
+```bash
+uvx --from git+https://github.com/adhityaravi/kubeloom kubeloom tui
+```
+
+> **Note:** Requires Python >=3.10, <3.14. Python 3.14 has stricter SSL certificate validation that may cause issues with some Kubernetes clusters.
 
 ## Why
 
