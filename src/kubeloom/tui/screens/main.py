@@ -50,6 +50,8 @@ class MainScreen(Screen[None]):
         Binding("c", "clear_mispicks", "Clear Errors", show=False),
         Binding("e", "enroll_pod", "Enroll Pod", show=False),
         Binding("u", "unenroll_pod", "Unenroll Pod", show=False),
+        Binding("i", "ignore_error", "Ignore Error", show=False),
+        Binding("I", "clear_ignores", "Clear Ignores", show=False),
         Binding("w", "weave_policy", "Weave Policy", show=False),
         Binding("W", "unweave_policies", "Unweave All", show=False),
         Binding("y", "copy_manifest", "Copy Manifest", show=False),
@@ -778,6 +780,28 @@ class MainScreen(Screen[None]):
         if self._get_active_tab() == TAB_MISPICKS:
             self.mispicks_tab.clear_errors()
             self._update_mispicks_table()
+
+    def action_ignore_error(self) -> None:
+        """Ignore errors matching the selected error's type+source."""
+        if self._get_active_tab() != TAB_MISPICKS:
+            return
+        table = self.query_one("#mispicks-table", DataTable)
+        if table.cursor_row is None:
+            return
+        error = self.mispicks_tab.get_error_at_row(table.cursor_row)
+        if not error:
+            return
+        desc = self.mispicks_tab.ignore_error(error)
+        self._update_mispicks_table()
+        self.app.notify(f"Ignoring {desc}", severity="information", timeout=2)
+
+    def action_clear_ignores(self) -> None:
+        """Clear all ignore rules."""
+        if self._get_active_tab() != TAB_MISPICKS:
+            return
+        self.mispicks_tab.clear_ignores()
+        self._update_mispicks_table()
+        self.app.notify("Ignores cleared", severity="information", timeout=2)
 
     async def action_enroll_pod(self) -> None:
         """Enroll selected pod in mesh (only in Resources tab)."""

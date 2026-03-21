@@ -16,7 +16,7 @@ class StatusBar(Horizontal):
     TAB_HINTS: ClassVar[dict[str, str]] = {
         "policies": "r: Refresh . n/p: Namespace . y: Copy",
         "resources": "r: Refresh . n/p: Namespace . e: Enroll . u: Unenroll",
-        "mispicks": "s: Start . x: Stop . c: Clear . y: Copy . w: Weave . W: Unweave",
+        "mispicks": "s: Start . x: Stop . c: Clear . y: Copy . i: Ignore . I: Unignore . w: Weave . W: Unweave",
     }
 
     def __init__(self) -> None:
