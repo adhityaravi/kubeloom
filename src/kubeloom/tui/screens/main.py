@@ -844,7 +844,19 @@ class MainScreen(Screen[None]):
             return
 
         policy = self._filtered_policies[self._policy_cursor]
-        manifest = policy.raw_manifest or policy.spec
+        raw = policy.raw_manifest
+        if raw:
+            metadata = {
+                k: v for k, v in raw.get("metadata", {}).items() if k in ("name", "namespace", "labels", "annotations")
+            }
+            manifest = {
+                "apiVersion": raw.get("apiVersion"),
+                "kind": raw.get("kind"),
+                "metadata": metadata,
+                "spec": raw.get("spec", {}),
+            }
+        else:
+            manifest = policy.spec
 
         try:
             manifest_yaml = yaml.dump(manifest, default_flow_style=False, indent=2, sort_keys=False)
