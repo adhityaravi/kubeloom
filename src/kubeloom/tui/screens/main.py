@@ -682,15 +682,31 @@ class MainScreen(Screen[None]):
         scroll_id = f"#{self._get_active_tab()}-detail-scroll"
         self.query_one(scroll_id, VerticalScroll).scroll_down()
 
+    def _scroll_list_to_cursor(self, scroll_id: str, cursor: int, total: int) -> None:
+        """Scroll a list pane to keep the cursor visible."""
+        try:
+            scroll = self.query_one(f"#{scroll_id}", VerticalScroll)
+            if total <= 0:
+                return
+            line_height = scroll.virtual_size.height / total
+            target_y = cursor * line_height
+            visible_height = scroll.size.height
+            # Scroll so cursor is roughly centered
+            scroll.scroll_to(y=target_y - visible_height / 2, animate=False)
+        except Exception:
+            pass
+
     def action_cursor_up(self) -> None:
         """Move cursor up in list/table."""
         tab = self._get_active_tab()
         if tab == TAB_POLICIES and self._policy_cursor > 0:
             self._policy_cursor -= 1
             self._render_policies_list()
+            self._scroll_list_to_cursor("policies-list-scroll", self._policy_cursor, len(self._filtered_policies))
         elif tab == TAB_RESOURCES and self._resource_cursor > 0:
             self._resource_cursor -= 1
             self._render_resources_list()
+            self._scroll_list_to_cursor("resources-list-scroll", self._resource_cursor, len(self._filtered_resources))
         elif tab == TAB_MISPICKS:
             self.query_one("#mispicks-table", DataTable).action_cursor_up()
         self._update_current_detail()
@@ -701,9 +717,11 @@ class MainScreen(Screen[None]):
         if tab == TAB_POLICIES and self._policy_cursor < len(self._filtered_policies) - 1:
             self._policy_cursor += 1
             self._render_policies_list()
+            self._scroll_list_to_cursor("policies-list-scroll", self._policy_cursor, len(self._filtered_policies))
         elif tab == TAB_RESOURCES and self._resource_cursor < len(self._filtered_resources) - 1:
             self._resource_cursor += 1
             self._render_resources_list()
+            self._scroll_list_to_cursor("resources-list-scroll", self._resource_cursor, len(self._filtered_resources))
         elif tab == TAB_MISPICKS:
             self.query_one("#mispicks-table", DataTable).action_cursor_down()
         self._update_current_detail()
