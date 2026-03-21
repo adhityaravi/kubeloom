@@ -21,7 +21,6 @@ class K8sClient(ClusterClient):
         self._api_client: client.ApiClient | None = None
         self._core_v1: client.CoreV1Api | None = None
         self._custom_objects: client.CustomObjectsApi | None = None
-        self._apps_v1: client.AppsV1Api | None = None
 
     async def _ensure_connected(self) -> None:
         """Ensure client is connected."""
@@ -39,7 +38,6 @@ class K8sClient(ClusterClient):
                 self._api_client = client.ApiClient()
                 self._core_v1 = client.CoreV1Api(self._api_client)
                 self._custom_objects = client.CustomObjectsApi(self._api_client)
-                self._apps_v1 = client.AppsV1Api(self._api_client)
 
             except Exception as e:
                 raise ConnectionError(f"Failed to connect to Kubernetes cluster: {e}") from e
@@ -559,4 +557,3 @@ class K8sClient(ClusterClient):
         self._api_client = None
         self._core_v1 = None
         self._custom_objects = None
-        self._apps_v1 = None

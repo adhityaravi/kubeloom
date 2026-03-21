@@ -4,7 +4,7 @@ from abc import ABC, abstractmethod
 from collections.abc import AsyncGenerator
 from typing import Any
 
-from kubeloom.core.models import AccessError, Cluster, Namespace, Policy, PolicyConflict, PolicyValidation, ServiceMesh
+from kubeloom.core.models import AccessError, Cluster, Namespace, Policy, PolicyValidation, ServiceMesh
 
 
 class MeshAdapter(ABC):
@@ -166,49 +166,6 @@ class MeshAdapter(ABC):
         pass
 
 
-class PolicyAnalyzer(ABC):
-    """Interface for policy analysis engines."""
-
-    @abstractmethod
-    def analyze_policy(self, policy: Policy, cluster: Cluster) -> Policy:
-        """Analyze a single policy and populate analysis results."""
-        pass
-
-    @abstractmethod
-    def find_conflicts(self, policies: list[Policy]) -> list[PolicyConflict]:
-        """Find conflicts between policies."""
-        pass
-
-    @abstractmethod
-    def suggest_improvements(self, policy: Policy) -> list[str]:
-        """Suggest improvements for a policy."""
-        pass
-
-    @abstractmethod
-    def check_security_issues(self, policy: Policy) -> list[str]:
-        """Check for security issues in a policy."""
-        pass
-
-
-class PolicyExporter(ABC):
-    """Interface for exporting policies to different formats."""
-
-    @abstractmethod
-    def export_policies(self, policies: list[Policy], output_path: str) -> None:
-        """Export policies to a file."""
-        pass
-
-    @abstractmethod
-    def get_supported_formats(self) -> list[str]:
-        """Get list of supported export formats."""
-        pass
-
-    @abstractmethod
-    def serialize_policy(self, policy: Policy) -> dict[str, Any]:
-        """Serialize a single policy to a dictionary."""
-        pass
-
-
 class ClusterClient(ABC):
     """Interface for Kubernetes cluster clients."""
 
@@ -230,33 +187,4 @@ class ClusterClient(ABC):
     @abstractmethod
     def is_connected(self) -> bool:
         """Check if client is connected to cluster."""
-        pass
-
-
-class EventListener(ABC):
-    """Interface for listening to policy events."""
-
-    @abstractmethod
-    async def start_watching(self, namespace: str | None = None) -> None:
-        """Start watching for policy changes."""
-        pass
-
-    @abstractmethod
-    async def stop_watching(self) -> None:
-        """Stop watching for policy changes."""
-        pass
-
-    @abstractmethod
-    def on_policy_created(self, policy: Policy) -> None:
-        """Handle policy creation event."""
-        pass
-
-    @abstractmethod
-    def on_policy_updated(self, old_policy: Policy, new_policy: Policy) -> None:
-        """Handle policy update event."""
-        pass
-
-    @abstractmethod
-    def on_policy_deleted(self, policy: Policy) -> None:
-        """Handle policy deletion event."""
         pass
