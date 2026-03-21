@@ -41,11 +41,14 @@ class MispicksTab:
         if filter_text:
             filter_lower = filter_text.lower()
             self._filtered_errors = [
-                e for e in sorted_errors
-                if (filter_lower in (e.pod_name or "").lower()
+                e
+                for e in sorted_errors
+                if (
+                    filter_lower in (e.pod_name or "").lower()
                     or filter_lower in (e.pod_namespace or "").lower()
                     or filter_lower in (e.source_workload or "").lower()
-                    or filter_lower in (e.target_service or "").lower())
+                    or filter_lower in (e.target_service or "").lower()
+                )
             ]
         else:
             self._filtered_errors = sorted_errors

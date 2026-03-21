@@ -81,7 +81,8 @@ class SmartLogTailer:
 
         # Find all ztunnel pods (search all namespaces)
         ztunnel_pods = await self.k8s_client.get_pods_by_label(
-            namespace=None, label_selector="app=ztunnel"  # All namespaces
+            namespace=None,
+            label_selector="app=ztunnel",  # All namespaces
         )
 
         for pod in ztunnel_pods:
@@ -99,7 +100,8 @@ class SmartLogTailer:
 
         # Find all waypoint pods (search all namespaces)
         waypoint_pods = await self.k8s_client.get_pods_by_label(
-            namespace=None, label_selector="gateway.istio.io/managed=istio.io-mesh-controller"  # All namespaces
+            namespace=None,
+            label_selector="gateway.istio.io/managed=istio.io-mesh-controller",  # All namespaces
         )
 
         for pod in waypoint_pods:

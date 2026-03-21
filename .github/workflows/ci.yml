@@ -23,7 +23,7 @@ jobs:
         run: uv run tox -e lint
 
       - name: Type check
-        run: uv run tox -e type
+        run: uv run tox -e static
 
       - name: Run tests
         run: uv run tox

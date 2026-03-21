@@ -416,9 +416,9 @@ class PolicyAnalyzer:
         self, resource: ResourceInfo, policies: list[Policy]
     ) -> list[tuple[ResourceInfo, list[AllowedRoute]]]:
         """Calculate what resources this resource can reach."""
-        outbound: dict[tuple[str, str, str], tuple[ResourceInfo, list[AllowedRoute]]] = (
-            {}
-        )  # Use dict to aggregate routes per target resource
+        outbound: dict[
+            tuple[str, str, str], tuple[ResourceInfo, list[AllowedRoute]]
+        ] = {}  # Use dict to aggregate routes per target resource
 
         for policy in policies:
             # Check if this resource (or its controller) is a source
@@ -458,9 +458,9 @@ class PolicyAnalyzer:
         self, resource: ResourceInfo, policies: list[Policy]
     ) -> list[tuple[ResourceInfo, list[AllowedRoute]]]:
         """Calculate what resources can reach this resource."""
-        inbound: dict[tuple[str, str, str], tuple[ResourceInfo, list[AllowedRoute]]] = (
-            {}
-        )  # Use dict to aggregate routes per source resource
+        inbound: dict[
+            tuple[str, str, str], tuple[ResourceInfo, list[AllowedRoute]]
+        ] = {}  # Use dict to aggregate routes per source resource
 
         for policy in policies:
             is_targeted = False

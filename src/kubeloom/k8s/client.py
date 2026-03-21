@@ -138,9 +138,7 @@ class K8sClient(ClusterClient):
                     return custom_objects.list_namespaced_custom_object(
                         group=group, version=version, namespace=namespace, plural=plural
                     )
-                return custom_objects.list_cluster_custom_object(
-                    group=group, version=version, plural=plural
-                )
+                return custom_objects.list_cluster_custom_object(group=group, version=version, plural=plural)
 
             response = await asyncio.to_thread(fetch)
             items = response.get("items", [])
@@ -283,7 +281,9 @@ class K8sClient(ClusterClient):
         import threading
 
         thread = threading.Thread(
-            target=stream_logs_in_thread, daemon=True, name=f"log-stream-{pod_name}"  # Won't block exit
+            target=stream_logs_in_thread,
+            daemon=True,
+            name=f"log-stream-{pod_name}",  # Won't block exit
         )
         thread.start()
 

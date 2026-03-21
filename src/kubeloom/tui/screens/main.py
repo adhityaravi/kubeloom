@@ -187,14 +187,13 @@ class MainScreen(Screen[None]):
             self._namespace_policy_counts = {}
 
             # Fetch AuthorizationPolicies for all namespaces in parallel
+            mesh_adapter = self.mesh_adapter
+
             async def get_ns_policies(ns_name: str) -> tuple[str, int]:
-                policies = await self.mesh_adapter.get_authorization_policies(ns_name)
+                policies = await mesh_adapter.get_authorization_policies(ns_name)
                 return (ns_name, len(policies))
 
-            results = await asyncio.gather(
-                *[get_ns_policies(ns.name) for ns in namespaces],
-                return_exceptions=True
-            )
+            results = await asyncio.gather(*[get_ns_policies(ns.name) for ns in namespaces], return_exceptions=True)
 
             for result in results:
                 if isinstance(result, tuple):
@@ -687,9 +686,7 @@ class MainScreen(Screen[None]):
             if self.status_bar:
                 self.status_bar.update_tailing_status(is_running, message)
 
-        self.mispicks_tab.start_tailing(
-            self.mesh_adapter, self.namespace_selector, update_callback, status_callback
-        )
+        self.mispicks_tab.start_tailing(self.mesh_adapter, self.namespace_selector, update_callback, status_callback)
 
     def action_stop_tailing(self) -> None:
         """Stop tailing logs (only in Mispicks tab)."""
@@ -738,13 +735,17 @@ class MainScreen(Screen[None]):
             return
 
         if resource.type != "pod":
-            self.app.notify(f"Cannot unenroll {resource.type} - only pods can be unenrolled", severity="warning", timeout=3)
+            self.app.notify(
+                f"Cannot unenroll {resource.type} - only pods can be unenrolled", severity="warning", timeout=3
+            )
             return
 
         # Check if namespace is mesh-enabled
         current_namespace = self._get_current_namespace_obj()
         if current_namespace and self.mesh_adapter and self.mesh_adapter.is_namespace_mesh_enabled(current_namespace):
-            self.app.notify("Pod cannot be removed from mesh - entire namespace is enrolled", severity="warning", timeout=5)
+            self.app.notify(
+                "Pod cannot be removed from mesh - entire namespace is enrolled", severity="warning", timeout=5
+            )
             return
 
         if self.mesh_adapter:
@@ -783,7 +784,9 @@ class MainScreen(Screen[None]):
             self.app.notify("Source pod is not enrolled - enroll it first", severity="warning", timeout=5)
             return
         if error.error_type.value != "access_denied":
-            self.app.notify(f"Can only weave for access_denied errors, not {error.error_type.value}", severity="warning", timeout=5)
+            self.app.notify(
+                f"Can only weave for access_denied errors, not {error.error_type.value}", severity="warning", timeout=5
+            )
             return
 
         if self.mesh_adapter:

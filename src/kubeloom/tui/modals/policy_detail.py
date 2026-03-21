@@ -62,7 +62,7 @@ class PolicyDetailScreen(Screen[None]):
 [bold]Type:[/bold] {self.policy.type.value}
 [bold]Mesh:[/bold] {self.policy.mesh_type.value}
 [bold]Status:[/bold] {self.policy.status.value}
-[bold]Created:[/bold] {self.policy.created_at or 'Unknown'}
+[bold]Created:[/bold] {self.policy.created_at or "Unknown"}
 
 {self._format_action()}
 
