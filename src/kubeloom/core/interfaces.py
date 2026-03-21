@@ -85,6 +85,18 @@ class MeshAdapter(ABC):
         """
         pass
 
+    def is_service_waypoint_enrolled(self, service: dict[str, Any]) -> bool:
+        """
+        Check if a service is enrolled in a waypoint proxy.
+
+        Args:
+            service: Service resource as a dictionary
+
+        Returns:
+            True if service has a waypoint proxy configured
+        """
+        return True
+
     @abstractmethod
     async def enroll_pod(self, pod_name: str, namespace: str) -> bool:
         """

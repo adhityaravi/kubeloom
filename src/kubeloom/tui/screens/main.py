@@ -265,23 +265,31 @@ class MainScreen(Screen[None]):
         if not self.mesh_adapter or not self.k8s_client or not current_namespace:
             return
 
-        # Get all pods in namespace once
+        # Get all pods and services in namespace once
         pods_by_name: dict[str, dict] = {}
+        services_by_name: dict[str, dict] = {}
         try:
             pods = await self.k8s_client.get_resources("v1", "Pod", current_namespace.name)
             pods_by_name = {p.get("metadata", {}).get("name"): p for p in pods}
+            services = await self.k8s_client.get_resources("v1", "Service", current_namespace.name)
+            services_by_name = {s.get("metadata", {}).get("name"): s for s in services}
         except Exception:
             return
 
-        # Check enrollment for each pod resource
+        # Check enrollment for each resource
         for resource in self.resources:
-            if resource.type != "pod":
-                self._enrollment_cache[resource.name] = True
-                continue
-
-            pod = pods_by_name.get(resource.name)
-            if pod:
-                self._enrollment_cache[resource.name] = self.mesh_adapter.is_pod_enrolled(pod, current_namespace)
+            if resource.type == "pod":
+                pod = pods_by_name.get(resource.name)
+                if pod:
+                    self._enrollment_cache[resource.name] = self.mesh_adapter.is_pod_enrolled(pod, current_namespace)
+                else:
+                    self._enrollment_cache[resource.name] = True
+            elif resource.type == "service":
+                svc = services_by_name.get(resource.name)
+                if svc:
+                    self._enrollment_cache[resource.name] = self.mesh_adapter.is_service_waypoint_enrolled(svc)
+                else:
+                    self._enrollment_cache[resource.name] = True
             else:
                 self._enrollment_cache[resource.name] = True
 
