@@ -54,7 +54,7 @@ class MeshAdapter(ABC):
         Tail access logs from the mesh and yield parsed access errors.
 
         This method should:
-        - Identify relevant mesh components (e.g., ztunnel, waypoint for Istio)
+        - Identify relevant mesh components (e.g., ztunnel, waypoint, and gateway for Istio)
         - Tail their logs efficiently
         - Parse log entries for access errors
         - Yield AccessError objects as they are detected

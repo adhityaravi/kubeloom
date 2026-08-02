@@ -63,7 +63,7 @@ Red highlighting means the pod isn't enrolled in the mesh or a service doesn't h
 
 ### 3. Start tailing errors
 
-Switch to **Mispicks** tab (`3`) and press `s` to start tailing logs. kubeloom watches all mesh firewall components (ztunnel, waypoint proxies) across all namespaces, parses their logs in real time, and categorizes errors:
+Switch to **Mispicks** tab (`3`) and press `s` to start tailing logs. kubeloom watches all mesh firewall components (ztunnel, waypoint proxies, and istio gateways) across all namespaces, parses their logs in real time, and categorizes errors:
 
 | Error Type | Meaning |
 |------------|---------|
